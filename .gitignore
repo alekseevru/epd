@@ -1,0 +1,42 @@
+# Environment files & Secrets
+.env
+.env.*
+!.env.example
+!.env.server.example
+
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build and temporary directories
+dist/
+build/
+.next/
+.wrangler/
+.vinext/
+.openai/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS & Editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Local databases and data tables
+*.sqlite
+*.sqlite3
+*.db
+*.xlsx
+*.xls
+*.csv
+
+# Python
+__pycache__/
+*.pyc

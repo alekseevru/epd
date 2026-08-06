@@ -1,0 +1,968 @@
+[
+  {
+    "client": "SHANGHAI MERCURY SUPPLY CHAIN MANAGEMENT CO LTD",
+    "number": "ГЕНЕРАЛЬНОЕ СОГЛАШЕНИЕ № MRCRYTAG001-07",
+    "date": "2024-07-11",
+    "last_invoice": "2025-09-18",
+    "invoice_count": 5
+  },
+  {
+    "client": "АВТОЗАВОД АГР ООО",
+    "number": "AGR-TAGLEX-01/09/2024",
+    "date": "2024-09-01",
+    "last_invoice": "2025-12-17",
+    "invoice_count": 3
+  },
+  {
+    "client": "АГМ ООО",
+    "number": "AGM-TAGLEX-01/09/2024",
+    "date": "2024-09-01",
+    "last_invoice": "2026-03-25",
+    "invoice_count": 102
+  },
+  {
+    "client": "АГРЛ ООО",
+    "number": "№4600004570",
+    "date": "2025-01-15",
+    "last_invoice": "2025-12-31",
+    "invoice_count": 126
+  },
+  {
+    "client": "АЗМ ООО",
+    "number": "Договор ТЭО № 2100001087",
+    "date": "2025-07-22",
+    "last_invoice": "2025-11-05",
+    "invoice_count": 2
+  },
+  {
+    "client": "АЙКОН ТАЙЕРС",
+    "number": "NT24-0314",
+    "date": "2024-07-13",
+    "last_invoice": "2026-04-02",
+    "invoice_count": 113
+  },
+  {
+    "client": "АЛИУМ АО",
+    "number": "№ TLC-1533 + протокол разногласий",
+    "date": "2024-12-10",
+    "last_invoice": "2025-09-08",
+    "invoice_count": 2
+  },
+  {
+    "client": "АНИМА ИНФИНИТА ПЭКЕДЖИНГ НОВГОРОД ООО",
+    "number": "Договор №AIPN/TAGLEX 2024",
+    "date": "2024-11-07",
+    "last_invoice": "2026-01-28",
+    "invoice_count": 10
+  },
+  {
+    "client": "АНИМА ИНФИНИТА ПЭКЕДЖИНГ СПБ ООО",
+    "number": "ДОГОВОР ТЭО № AIPS/TAGLEX 2024",
+    "date": "2024-11-08",
+    "last_invoice": "2026-02-19",
+    "invoice_count": 19
+  },
+  {
+    "client": "АПРИОРИ МАШИНС YTL",
+    "number": "YLC-1465",
+    "date": "2023-11-29",
+    "last_invoice": "2026-02-17",
+    "invoice_count": 12
+  },
+  {
+    "client": "АРВИАЙ РАШЕН ВЕНЧУР ИНВЕСТМЕНТС",
+    "number": "6-2-100/004672-24",
+    "date": "2024-05-17",
+    "last_invoice": "2025-10-23",
+    "invoice_count": 1
+  },
+  {
+    "client": "АРВИАЙ РАШЕН ВЕНЧУР ИНВЕСТМЕНТС",
+    "number": "RVI-YUS-310821",
+    "date": "2021-08-31",
+    "last_invoice": "2026-03-23",
+    "invoice_count": 74
+  },
+  {
+    "client": "АРНЕСТ ЮНИРУСЬ ООО",
+    "number": "NST-172527",
+    "date": "2024-03-20",
+    "last_invoice": "2026-03-10",
+    "invoice_count": 30
+  },
+  {
+    "client": "АРПИ КАНОН МЕДИКАЛ СИСТЕМЗ ООО",
+    "number": "YLC-1459",
+    "date": "2023-10-30",
+    "last_invoice": "2026-03-12",
+    "invoice_count": 26
+  },
+  {
+    "client": "АФТ - СИДЕНЬЯ ООО",
+    "number": "№ FAS-SP2022/0002",
+    "date": "2022-01-25",
+    "last_invoice": "2026-01-26",
+    "invoice_count": 3
+  },
+  {
+    "client": "БДР Термия Рус",
+    "number": "ДОГОВОР № ОЛ-1/240722",
+    "date": "2024-07-22",
+    "last_invoice": "2026-03-28",
+    "invoice_count": 282
+  },
+  {
+    "client": "БЕКО",
+    "number": "YLC-259",
+    "date": "2015-07-01",
+    "last_invoice": "2026-03-12",
+    "invoice_count": 4
+  },
+  {
+    "client": "БЕЛЛА Восток",
+    "number": "YLC 01102016",
+    "date": "2016-10-01",
+    "last_invoice": "2026-03-23",
+    "invoice_count": 23
+  },
+  {
+    "client": "БЕЛЛА Восток",
+    "number": "ДОГОВОР № 85/ЛОГ/2022",
+    "date": "2022-10-17",
+    "last_invoice": "2025-11-26",
+    "invoice_count": 5
+  },
+  {
+    "client": "БИННОФАРМ АО",
+    "number": "№ TLC-1534 + протокол разногласий",
+    "date": "2024-12-10",
+    "last_invoice": "2025-08-18",
+    "invoice_count": 2
+  },
+  {
+    "client": "БТЛ",
+    "number": "YL_BTL/0214",
+    "date": "2014-02-24",
+    "last_invoice": "2026-04-02",
+    "invoice_count": 563
+  },
+  {
+    "client": "ВЕКТОР ДИСТРИБЬЮШН ООО",
+    "number": "TLC-1547 + Приложение № 1,2",
+    "date": "2025-03-20",
+    "last_invoice": "2026-01-26",
+    "invoice_count": 11
+  },
+  {
+    "client": "Вимм-Билль-Данн",
+    "number": "SPO1-YSN/2022 + Приложения №№ 1/1, 2/1, 3.1/1, 3.2./1, 4.1/1, 4.2/1, 6/1, 7/1, 8/1, 9/1+ ДС Об инфо безопасности",
+    "date": "2022-08-04",
+    "last_invoice": "2026-04-01",
+    "invoice_count": 99
+  },
+  {
+    "client": "ВИНОПТ ООО",
+    "number": "№ TLC-1565",
+    "date": "2025-05-14",
+    "last_invoice": "2026-03-01",
+    "invoice_count": 16
+  },
+  {
+    "client": "ВОСКРЕСЕНСК-ХИМВОЛОКНО",
+    "number": "YLC-654",
+    "date": "2017-04-21",
+    "last_invoice": "2025-09-15",
+    "invoice_count": 10
+  },
+  {
+    "client": "Востокхимволокно",
+    "number": "YLC-139",
+    "date": "2015-01-14",
+    "last_invoice": "2025-12-26",
+    "invoice_count": 26
+  },
+  {
+    "client": "ГР ДИЗАЙН ООО",
+    "number": "Договор-заявка № TLС-1576",
+    "date": "2025-07-21",
+    "last_invoice": "2025-11-01",
+    "invoice_count": 5
+  },
+  {
+    "client": "ГР ДИЗАЙН ООО",
+    "number": "№ TLC-1585",
+    "date": "2025-09-12",
+    "last_invoice": "2026-01-28",
+    "invoice_count": 7
+  },
+  {
+    "client": "Гранд-Трейд АО",
+    "number": "Договор GT/00001193/23",
+    "date": "2025-01-22",
+    "last_invoice": "2026-04-01",
+    "invoice_count": 935
+  },
+  {
+    "client": "Гришко",
+    "number": "YLC-1422 + Приложение 1 и 2 + Протокол разногласий",
+    "date": "2022-10-18",
+    "last_invoice": "2026-03-14",
+    "invoice_count": 21
+  },
+  {
+    "client": "Гротекс",
+    "number": "Договор № 0405",
+    "date": "2022-05-04",
+    "last_invoice": "2026-04-01",
+    "invoice_count": 51
+  },
+  {
+    "client": "ДАЙВА РУС",
+    "number": "YLС-1024",
+    "date": "2019-05-20",
+    "last_invoice": "2025-08-07",
+    "invoice_count": 2
+  },
+  {
+    "client": "ДЁЛЕР НФ И БИ ООО",
+    "number": "№ YLC-1463 от 21 ноября 2023 г.",
+    "date": "2023-11-21",
+    "last_invoice": "2026-03-26",
+    "invoice_count": 20
+  },
+  {
+    "client": "Дж Т И Донской табак ( ранее ТБК)",
+    "number": "Договор № 1413000345",
+    "date": "2024-05-22",
+    "last_invoice": "2026-03-25",
+    "invoice_count": 83
+  },
+  {
+    "client": "Дж Т И Донской табак ( ранее ТБК)",
+    "number": "ТБК-30/19",
+    "date": "2019-05-15",
+    "last_invoice": "2026-04-02",
+    "invoice_count": 149
+  },
+  {
+    "client": "ДЖ.Т.И. РОССИЯ ООО",
+    "number": "№ 073593",
+    "date": "2024-01-25",
+    "last_invoice": "2025-10-05",
+    "invoice_count": 35
+  },
+  {
+    "client": "ДЖЕЙЭЙЧТИ РУС ООО",
+    "number": "YLC-1478",
+    "date": "2024-03-06",
+    "last_invoice": "2026-03-27",
+    "invoice_count": 38
+  },
+  {
+    "client": "Диаверум Русс",
+    "number": "YLC-523",
+    "date": "2016-08-17",
+    "last_invoice": "2025-12-23",
+    "invoice_count": 9
+  },
+  {
+    "client": "Директ Трейд",
+    "number": "YLC-1233",
+    "date": "2021-03-23",
+    "last_invoice": "2026-04-02",
+    "invoice_count": 29
+  },
+  {
+    "client": "Евроазия Группаж Транспорт ООО",
+    "number": "TLC-1622",
+    "date": "",
+    "last_invoice": "2026-03-12",
+    "invoice_count": 1
+  },
+  {
+    "client": "ЗЛ ПЭКЭДЖИНГ ООО",
+    "number": "TLC-1516",
+    "date": "2024-10-01",
+    "last_invoice": "2026-03-19",
+    "invoice_count": 58
+  },
+  {
+    "client": "Интеграция и развитие",
+    "number": "YLC-014",
+    "date": "2014-07-14",
+    "last_invoice": "2025-12-07",
+    "invoice_count": 81
+  },
+  {
+    "client": "ИТМС АО (Ранее БАТ)",
+    "number": "01/10428114/12",
+    "date": "2016-10-01",
+    "last_invoice": "2025-11-05",
+    "invoice_count": 173
+  },
+  {
+    "client": "ИТМС АО (Ранее БАТ)",
+    "number": "01/10428114/12 (consol)",
+    "date": "2016-10-01",
+    "last_invoice": "2025-07-08",
+    "invoice_count": 2
+  },
+  {
+    "client": "ИТМС АО (Ранее БАТ)",
+    "number": "10428114-2",
+    "date": "2025-09-01",
+    "last_invoice": "2026-03-31",
+    "invoice_count": 523
+  },
+  {
+    "client": "ИТМС АО (Ранее БАТ)",
+    "number": "Нет номера договора",
+    "date": "",
+    "last_invoice": "2025-12-17",
+    "invoice_count": 4
+  },
+  {
+    "client": "КАЛЕ КИЛИТ ЕВРАЗИЯ ООО",
+    "number": "YLC-1420",
+    "date": "2022-10-13",
+    "last_invoice": "2026-04-01",
+    "invoice_count": 41
+  },
+  {
+    "client": "Каскад",
+    "number": "YLC-334",
+    "date": "2015-11-12",
+    "last_invoice": "2026-03-31",
+    "invoice_count": 84
+  },
+  {
+    "client": "КДВ ВОРОНЕЖ ООО",
+    "number": "№ КДВ В-1373",
+    "date": "2025-06-19",
+    "last_invoice": "2025-07-31",
+    "invoice_count": 1
+  },
+  {
+    "client": "КДВ ГРУПП ООО",
+    "number": "Договор № 56/2025",
+    "date": "2025-04-02",
+    "last_invoice": "2026-04-02",
+    "invoice_count": 49
+  },
+  {
+    "client": "КЗХ БИРЮСА ОАО",
+    "number": "№TLC-1570",
+    "date": "2025-06-09",
+    "last_invoice": "2025-08-04",
+    "invoice_count": 2
+  },
+  {
+    "client": "Кимберли Кларк",
+    "number": "KC&TAGLEX",
+    "date": "2024-08-01",
+    "last_invoice": "2026-04-02",
+    "invoice_count": 269
+  },
+  {
+    "client": "Кимберли Кларк",
+    "number": "Нет номера договора",
+    "date": "",
+    "last_invoice": "2026-04-01",
+    "invoice_count": 14
+  },
+  {
+    "client": "Компания Май",
+    "number": "YLC-1447",
+    "date": "2023-01-10",
+    "last_invoice": "2026-03-26",
+    "invoice_count": 655
+  },
+  {
+    "client": "Корпорация МОЛ",
+    "number": "YLC-1386",
+    "date": "2022-07-06",
+    "last_invoice": "2025-12-18",
+    "invoice_count": 1
+  },
+  {
+    "client": "Крес Нева",
+    "number": "ДОГОВОР № С001985",
+    "date": "2024-03-14",
+    "last_invoice": "2025-12-08",
+    "invoice_count": 1
+  },
+  {
+    "client": "Крес Нева",
+    "number": "№ 1311000040",
+    "date": "2024-09-06",
+    "last_invoice": "2025-12-24",
+    "invoice_count": 17
+  },
+  {
+    "client": "КС Транспорт",
+    "number": "TLC-1500",
+    "date": "2024-08-08",
+    "last_invoice": "2026-02-11",
+    "invoice_count": 4
+  },
+  {
+    "client": "КС ТРАНСПОРТ ЛОГИСТИК ООО",
+    "number": "№ TLC-1544",
+    "date": "2025-01-28",
+    "last_invoice": "2025-10-16",
+    "invoice_count": 5
+  },
+  {
+    "client": "ЛЮТНЕР СПБ ООО",
+    "number": "ДОГОВОР № TLC-1494",
+    "date": "2024-07-29",
+    "last_invoice": "2026-04-02",
+    "invoice_count": 128
+  },
+  {
+    "client": "МБ РУС",
+    "number": "Договор ТЭО № 2001032100/2001032078",
+    "date": "2021-10-23",
+    "last_invoice": "2026-03-31",
+    "invoice_count": 65
+  },
+  {
+    "client": "МЕРКАТОР МЕДИКАЛ",
+    "number": "YLC-1304",
+    "date": "2021-10-15",
+    "last_invoice": "2025-10-15",
+    "invoice_count": 4
+  },
+  {
+    "client": "МЕРКАТОР МЕДИКАЛ",
+    "number": "YLC-1375",
+    "date": "2022-05-27",
+    "last_invoice": "2025-09-26",
+    "invoice_count": 2
+  },
+  {
+    "client": "Метро",
+    "number": "CN_LG_21_01191",
+    "date": "2021-11-01",
+    "last_invoice": "2026-04-02",
+    "invoice_count": 181
+  },
+  {
+    "client": "МОТОР-ПЛЕЙС",
+    "number": "YLC-1427",
+    "date": "2022-10-25",
+    "last_invoice": "2026-03-16",
+    "invoice_count": 56
+  },
+  {
+    "client": "МОТОР-ПЛЕЙС",
+    "number": "Нет номера договора",
+    "date": "",
+    "last_invoice": "2025-12-17",
+    "invoice_count": 1
+  },
+  {
+    "client": "МУЛТОН АО",
+    "number": "Договор б/н",
+    "date": "2023-05-22",
+    "last_invoice": "2026-03-31",
+    "invoice_count": 104
+  },
+  {
+    "client": "МУЛТОН АО",
+    "number": "Договор б/н (consol)",
+    "date": "2023-05-22",
+    "last_invoice": "2026-03-31",
+    "invoice_count": 189
+  },
+  {
+    "client": "МУЛТОН ПАРТНЕРС ООО",
+    "number": "Договор б/н",
+    "date": "2025-03-17",
+    "last_invoice": "2026-03-03",
+    "invoice_count": 8
+  },
+  {
+    "client": "МУЛТОН ПАРТНЕРС ООО",
+    "number": "Договор б/н (consol)",
+    "date": "2025-03-17",
+    "last_invoice": "2026-03-03",
+    "invoice_count": 8
+  },
+  {
+    "client": "МУМТ",
+    "number": "02-10428114",
+    "date": "2022-02-07",
+    "last_invoice": "2025-10-01",
+    "invoice_count": 1
+  },
+  {
+    "client": "НИЖФАРМ",
+    "number": "№YLC-1493",
+    "date": "2023-07-06",
+    "last_invoice": "2026-03-27",
+    "invoice_count": 16
+  },
+  {
+    "client": "НТС Градиент",
+    "number": "YLC-544",
+    "date": "2016-09-21",
+    "last_invoice": "2026-03-06",
+    "invoice_count": 29
+  },
+  {
+    "client": "Офис-импэкс",
+    "number": "YLC-450",
+    "date": "2015-04-11",
+    "last_invoice": "2026-04-02",
+    "invoice_count": 892
+  },
+  {
+    "client": "Офис-импэкс",
+    "number": "YLC-450 (consol)",
+    "date": "2015-04-11",
+    "last_invoice": "2026-02-09",
+    "invoice_count": 69
+  },
+  {
+    "client": "Офис-импэкс",
+    "number": "Нет номера договора",
+    "date": "",
+    "last_invoice": "2026-01-14",
+    "invoice_count": 1
+  },
+  {
+    "client": "ПепсиКо Холдингс",
+    "number": "SPO1-YSN/2022 +1/1,2/1,3.1/1,3.2./1,4.1/1,4.2/1,6/1,7/1,8/1,9/1+ДС",
+    "date": "2022-08-04",
+    "last_invoice": "2026-04-01",
+    "invoice_count": 141
+  },
+  {
+    "client": "ПЕТЕРБУРГ ПРОДАКТС ИНТЕРНЕШНЛ",
+    "number": "PPI-YUSENRUS-01082022 + Приложения №1- №7",
+    "date": "2022-08-01",
+    "last_invoice": "2026-03-24",
+    "invoice_count": 10
+  },
+  {
+    "client": "Петро",
+    "number": "Договор № 1177000327",
+    "date": "2025-04-01",
+    "last_invoice": "2026-04-01",
+    "invoice_count": 61
+  },
+  {
+    "client": "Петро",
+    "number": "Договор № 1177000478 + Приложение № 1 и форма Акта",
+    "date": "2025-09-19",
+    "last_invoice": "2025-12-26",
+    "invoice_count": 3
+  },
+  {
+    "client": "Петро",
+    "number": "ДОГОВОР № Р005285",
+    "date": "2024-03-15",
+    "last_invoice": "2026-03-31",
+    "invoice_count": 700
+  },
+  {
+    "client": "Петро",
+    "number": "№ 1177000110",
+    "date": "2024-08-22",
+    "last_invoice": "2026-03-27",
+    "invoice_count": 440
+  },
+  {
+    "client": "Петро",
+    "number": "№ P005250",
+    "date": "2024-01-16",
+    "last_invoice": "2025-08-05",
+    "invoice_count": 1
+  },
+  {
+    "client": "ПОСУДА ОДО",
+    "number": "№ TLC-1609",
+    "date": "2025-12-22",
+    "last_invoice": "2026-02-05",
+    "invoice_count": 1
+  },
+  {
+    "client": "Проктер энд Гэмбл Дистрибьюторская Компания",
+    "number": "SRD-Yusen-2019 [Consol]",
+    "date": "2019-07-01",
+    "last_invoice": "2025-07-28",
+    "invoice_count": 1
+  },
+  {
+    "client": "Проктер энд Гэмбл Дистрибьюторская Компания",
+    "number": "SRD-YUSENRUS-01082022 [consol] + Приложения №1-№7",
+    "date": "2022-08-01",
+    "last_invoice": "2026-03-16",
+    "invoice_count": 237
+  },
+  {
+    "client": "Проктер энд Гэмбл-Новомосковск",
+    "number": "NOVO-YUSENRUS-01082022",
+    "date": "2022-08-01",
+    "last_invoice": "2026-03-31",
+    "invoice_count": 312
+  },
+  {
+    "client": "Проктер энд Гэмбл-Новомосковск",
+    "number": "NOVO-YUSENRUS-01082022 + Приложения 1-7",
+    "date": "2022-08-01",
+    "last_invoice": "2026-03-17",
+    "invoice_count": 58
+  },
+  {
+    "client": "Проктер энд Гэмбл-Новомосковск",
+    "number": "RMT-YusenLogistics-2017",
+    "date": "2017-07-01",
+    "last_invoice": "2025-09-29",
+    "invoice_count": 2
+  },
+  {
+    "client": "ПРОФЭКВИП",
+    "number": "YLC-1424",
+    "date": "2022-10-18",
+    "last_invoice": "2026-02-28",
+    "invoice_count": 13
+  },
+  {
+    "client": "РЕ Трэйдинг",
+    "number": "YLC- 901",
+    "date": "2018-07-20",
+    "last_invoice": "2026-04-01",
+    "invoice_count": 233
+  },
+  {
+    "client": "РОСШИНА - ИНВЕСТ Краснодар",
+    "number": "TLC-1581",
+    "date": "2025-06-30",
+    "last_invoice": "2026-03-25",
+    "invoice_count": 7
+  },
+  {
+    "client": "Росшина-Инвест",
+    "number": "YLC-1294",
+    "date": "2021-09-06",
+    "last_invoice": "2026-04-02",
+    "invoice_count": 143
+  },
+  {
+    "client": "Саммит Агро",
+    "number": "SVO 12-03/05-14",
+    "date": "2014-03-06",
+    "last_invoice": "2026-01-23",
+    "invoice_count": 2
+  },
+  {
+    "client": "Саммит Агро",
+    "number": "YLC-1496",
+    "date": "2023-07-28",
+    "last_invoice": "2026-03-31",
+    "invoice_count": 33
+  },
+  {
+    "client": "СЕЛЕКТЕЛ АО",
+    "number": "YLC №1394 + Приложение №1 и №2",
+    "date": "2022-06-17",
+    "last_invoice": "2025-12-23",
+    "invoice_count": 8
+  },
+  {
+    "client": "СИНТЕЗ ПАО",
+    "number": "№ TLC-1532 + протокол разногласий",
+    "date": "2024-12-10",
+    "last_invoice": "2026-03-22",
+    "invoice_count": 10
+  },
+  {
+    "client": "СК Трейд",
+    "number": "Договор № OX-2972 + Протокол разногласий + ДС к ПР",
+    "date": "2022-10-04",
+    "last_invoice": "2026-01-30",
+    "invoice_count": 20
+  },
+  {
+    "client": "Стеклокомпозит",
+    "number": "YLC-1124",
+    "date": "2020-03-30",
+    "last_invoice": "2025-12-11",
+    "invoice_count": 1
+  },
+  {
+    "client": "Странник",
+    "number": "Нет номера договора",
+    "date": "",
+    "last_invoice": "2026-03-20",
+    "invoice_count": 2
+  },
+  {
+    "client": "ТАГЛЕКС ГРУПП ХОЛДИНГ ООО",
+    "number": "Нет номера договора",
+    "date": "",
+    "last_invoice": "2026-01-19",
+    "invoice_count": 8
+  },
+  {
+    "client": "ТАГЛЕКС ТЕРМИНАЛ ЛОГОПАРК ООО",
+    "number": "0716-TTL303",
+    "date": "2025-04-14",
+    "last_invoice": "2025-12-31",
+    "invoice_count": 3
+  },
+  {
+    "client": "ТАГЛЕКС ТЕРМИНАЛ ЛОГОПАРК ООО",
+    "number": "1201-1648",
+    "date": "2012-02-01",
+    "last_invoice": "2025-07-01",
+    "invoice_count": 3
+  },
+  {
+    "client": "ТАГЛЕКС ТЕРМИНАЛ ЛОГОПАРК ООО",
+    "number": "TLC-1524",
+    "date": "2024-11-01",
+    "last_invoice": "2025-09-05",
+    "invoice_count": 11
+  },
+  {
+    "client": "ТАГЛЕКС ТЕРМИНАЛ ЛОГОПАРК ООО",
+    "number": "TLC-1556",
+    "date": "2025-04-14",
+    "last_invoice": "2026-03-26",
+    "invoice_count": 54
+  },
+  {
+    "client": "ТАГЛЕКС ТЕРМИНАЛ ЛОГОПАРК ООО",
+    "number": "YLC-649",
+    "date": "2017-04-13",
+    "last_invoice": "2025-07-04",
+    "invoice_count": 1
+  },
+  {
+    "client": "ТАГЛЕКС ТЕРМИНАЛ ЛОГОПАРК ООО",
+    "number": "Нет номера договора",
+    "date": "",
+    "last_invoice": "2026-04-02",
+    "invoice_count": 27
+  },
+  {
+    "client": "Таглекс Эссет Менеджмент ООО",
+    "number": "Нет номера договора",
+    "date": "",
+    "last_invoice": "2026-03-05",
+    "invoice_count": 9
+  },
+  {
+    "client": "ТВОЕ ООО",
+    "number": "Договор № TLC-1527",
+    "date": "2025-02-14",
+    "last_invoice": "2025-11-29",
+    "invoice_count": 84
+  },
+  {
+    "client": "ТВОЕ ООО",
+    "number": "Нет номера договора",
+    "date": "",
+    "last_invoice": "2026-03-23",
+    "invoice_count": 1
+  },
+  {
+    "client": "ТЕХМАШЮНИТ ООО",
+    "number": "TLC-1515",
+    "date": "2024-09-25",
+    "last_invoice": "2025-12-19",
+    "invoice_count": 4
+  },
+  {
+    "client": "ТЕХНОНИКОЛЬ-СТРОИТЕЛЬНЫЕ СИСТЕМЫ ООО",
+    "number": "Договор ТЭО № 24/СС/25",
+    "date": "2025-07-23",
+    "last_invoice": "2026-03-16",
+    "invoice_count": 21
+  },
+  {
+    "client": "ТЕХНОНИКОЛЬ-СТРОИТЕЛЬНЫЕ СИСТЕМЫ ООО",
+    "number": "ДОГОВОР ТЭО № 27/CC/25",
+    "date": "2025-09-15",
+    "last_invoice": "2026-02-18",
+    "invoice_count": 9
+  },
+  {
+    "client": "ТЕХНОНИКОЛЬ-СТРОИТЕЛЬНЫЕ СИСТЕМЫ ООО",
+    "number": "Договор-заявка №1",
+    "date": "2025-07-17",
+    "last_invoice": "2025-07-23",
+    "invoice_count": 1
+  },
+  {
+    "client": "ТММ",
+    "number": "YLC-1475",
+    "date": "2023-04-11",
+    "last_invoice": "2026-02-03",
+    "invoice_count": 36
+  },
+  {
+    "client": "ТММ",
+    "number": "YLC-319",
+    "date": "2015-10-16",
+    "last_invoice": "2025-09-10",
+    "invoice_count": 4
+  },
+  {
+    "client": "ТОРИ",
+    "number": "YLC-1471",
+    "date": "2024-01-25",
+    "last_invoice": "2026-02-26",
+    "invoice_count": 2
+  },
+  {
+    "client": "ТОРСНА ГРУПП ООО",
+    "number": "Договор № TLC-1621",
+    "date": "2026-02-19",
+    "last_invoice": "2026-03-12",
+    "invoice_count": 2
+  },
+  {
+    "client": "ТСП ООО",
+    "number": "TLC-1579",
+    "date": "2025-07-24",
+    "last_invoice": "2025-08-14",
+    "invoice_count": 2
+  },
+  {
+    "client": "ТЯГОВАЯ СИЛА ООО",
+    "number": "ТLС-1501",
+    "date": "2024-08-20",
+    "last_invoice": "2026-03-18",
+    "invoice_count": 394
+  },
+  {
+    "client": "ФАЙН ИНГРЕДИЕНТС АО",
+    "number": "YLC1487",
+    "date": "2024-04-27",
+    "last_invoice": "2026-03-30",
+    "invoice_count": 70
+  },
+  {
+    "client": "ФАЙН ИНГРЕДИЕНТС АО",
+    "number": "Нет номера договора",
+    "date": "",
+    "last_invoice": "2026-01-16",
+    "invoice_count": 1
+  },
+  {
+    "client": "ФЕС ПРОДУКТ",
+    "number": "YLC-953 (RUB)",
+    "date": "2018-11-29",
+    "last_invoice": "2026-03-23",
+    "invoice_count": 306
+  },
+  {
+    "client": "ФИЛИП МОРРИС ИЖОРА АО",
+    "number": "Договор ТЭ № 4519373",
+    "date": "2024-01-15",
+    "last_invoice": "2026-04-02",
+    "invoice_count": 364
+  },
+  {
+    "client": "Фрито Лей Мануфактуринг",
+    "number": "SPO1-YSN/2022 + Приложения №№ 1/1, 2/1, 3.1/1, 3.2./1, 4.1/1, 4.2/1, 6/1, 7/1, 8/1, 9/1+ ДС Об инфо безопасности",
+    "date": "2022-08-04",
+    "last_invoice": "2025-09-05",
+    "invoice_count": 2
+  },
+  {
+    "client": "ФЭР ООО (ранее Форесия)",
+    "number": "YLC-454",
+    "date": "2016-10-05",
+    "last_invoice": "2026-03-18",
+    "invoice_count": 5
+  },
+  {
+    "client": "ХАЙДЖИН ТЕКНОЛОДЖИЗ ООО",
+    "number": "Договор № 91/24",
+    "date": "2024-05-03",
+    "last_invoice": "2025-09-25",
+    "invoice_count": 2
+  },
+  {
+    "client": "Хитачи",
+    "number": "YL-HCMR/2205 + Приложение 1",
+    "date": "2012-05-01",
+    "last_invoice": "2025-08-18",
+    "invoice_count": 3
+  },
+  {
+    "client": "ШАТЕ-М ПЛЮС",
+    "number": "Договор № YLC-1105",
+    "date": "2020-01-23",
+    "last_invoice": "2025-11-30",
+    "invoice_count": 24
+  },
+  {
+    "client": "ЭВЬЯП РУС ООО",
+    "number": "№ YLC-1473",
+    "date": "2024-02-15",
+    "last_invoice": "2026-03-26",
+    "invoice_count": 46
+  },
+  {
+    "client": "ЭЛЕМЕНТ ГРУПП АО",
+    "number": "Договор №TLC-1567",
+    "date": "2025-05-26",
+    "last_invoice": "2026-03-01",
+    "invoice_count": 28
+  },
+  {
+    "client": "ЭЛИАС РУС ООО",
+    "number": "TLC-1555",
+    "date": "2025-03-25",
+    "last_invoice": "2025-11-08",
+    "invoice_count": 2
+  },
+  {
+    "client": "ЭЛИТЕК ЛОДЖИСТИК ООО",
+    "number": "Договор TLC-1613",
+    "date": "2026-01-20",
+    "last_invoice": "2026-03-15",
+    "invoice_count": 5
+  },
+  {
+    "client": "ЭМ ЭЙЧ АЙ РУС",
+    "number": "YLC-1136",
+    "date": "2020-05-12",
+    "last_invoice": "2026-03-31",
+    "invoice_count": 10
+  },
+  {
+    "client": "Энергокомплект",
+    "number": "YLC-1001",
+    "date": "2019-04-02",
+    "last_invoice": "2026-03-27",
+    "invoice_count": 57
+  },
+  {
+    "client": "ЭСТРА АУТОМОТИВ СИСТЕМС РУС",
+    "number": "YLC-276",
+    "date": "2015-05-31",
+    "last_invoice": "2026-03-18",
+    "invoice_count": 22
+  },
+  {
+    "client": "ЮСИДЖИ",
+    "number": "Договор № TLC-1529",
+    "date": "2024-11-18",
+    "last_invoice": "2026-03-31",
+    "invoice_count": 806
+  },
+  {
+    "client": "ЮСИДЖИ",
+    "number": "Нет номера договора",
+    "date": "",
+    "last_invoice": "2026-03-05",
+    "invoice_count": 6
+  }
+]

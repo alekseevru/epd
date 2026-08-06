@@ -1,0 +1,57 @@
+name: agr-epd
+
+services:
+  agr-epd:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    image: agr-epd:latest
+    container_name: agr-epd
+    restart: unless-stopped
+    ports:
+      - "${AGR_HTTP_PORT:-3000}:3000"
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3000
+      PYTHON_BIN: python3
+
+      # Необязательно: задайте в серверном .env для общей автоматической авторизации.
+      # Если оставить пустыми, сотрудники смогут вводить доступ на первом экране.
+      TMS_LOGIN: "${TMS_LOGIN:-}"
+      TMS_PASSWORD: "${TMS_PASSWORD:-}"
+
+      AGR_REFERENCES_DIR: /data/references
+      AGR_COMPANIES_FILE: /data/references/companies.xlsx
+      AGR_EDO_FILE: /data/references/counteragents.csv
+      AGR_VEHICLES_FILE: /data/references/vehicles.xlsx
+      AGR_DRIVERS_FILE: /data/references/drivers.xlsx
+      AGR_POINTS_FILE: /data/references/route-points.xlsx
+
+    extra_hosts:
+      - "bln-log02.ylrus.com:172.18.74.15"
+
+    volumes:
+      # Кэш реестров TMS сохраняется при обновлении контейнера.
+      - agr-work:/app/web_app/work
+      # Справочники хранятся в ./data/references и обновляются приложением из TMS.
+      # counteragents.csv приложение не изменяет: он поступает только из Диадока.
+      - ./data/references:/data/references
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/tms-status').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 8s
+      retries: 5
+      start_period: 45s
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - agr-internal
+
+volumes:
+  agr-work:
+
+networks:
+  agr-internal:
+    driver: bridge
+

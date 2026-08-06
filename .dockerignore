@@ -1,0 +1,14 @@
+.git
+.gitignore
+**/node_modules
+**/dist
+**/.vinext
+**/.next
+**/.wrangler
+**/work
+**/__pycache__
+**/*.pyc
+*.zip
+data/references/*
+!data/references/.gitkeep
+
