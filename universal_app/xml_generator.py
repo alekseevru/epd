@@ -17,6 +17,13 @@ TAGLEX = {
     "edo": "2BM-7734515704-771001001-201411210937449434253",
 }
 
+ADDRESS_PART_PATTERNS = {
+    "Индекс": r"(?<!\d)(\d{6})(?!\d)",
+    "Дом": r"(?:^|[,;]\s*|\s)(?:д(?:ом)?\.?)\s*([\w/-]+)",
+    "Корпус": r"(?:^|[,;]\s*|\s)(?:корп(?:ус)?\.?|к\.?|стр(?:оение)?\.?)\s*([\w.\-/ ]+?)(?=\s*[,;]|$)",
+    "Кварт": r"(?:^|[,;]\s*|\s)(?:кв(?:артира)?\.?)\s*([\w\-/]+)",
+}
+
 
 def party(company: dict | None, fallback_name: str = "") -> dict:
     company = company or {}
@@ -31,10 +38,11 @@ def party(company: dict | None, fallback_name: str = "") -> dict:
 
 def address_attributes(text: str) -> dict:
     text = clean(text)
-    attrs = {}
-    postal = re.search(r"\b\d{6}\b", text)
-    if postal:
-        attrs["Индекс"] = postal.group()
+    attrs: dict[str, str] = {}
+    for key, pattern in ADDRESS_PART_PATTERNS.items():
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            attrs[key] = clean(match.group(1))
     lowered = text.lower()
     region = "78" if "санкт-петербург" in lowered or "спб" in lowered else (
         "77" if "москва" in lowered and "московск" not in lowered else
@@ -42,7 +50,17 @@ def address_attributes(text: str) -> dict:
         "47" if "ленинградск" in lowered else "78"
     )
     attrs["КодРегион"] = region
-    attrs["Улица"] = text[:128] or "Адрес уточняется"
+    street_match = re.search(
+        r"((?:ул(?:ица)?\.?|пер(?:еулок)?\.?|наб(?:ережная)?\.?|ш(?:оссе)?\.?|пр(?:оспект|оезд)?\.?|пл(?:ощадь)?\.?)\s+.+?)(?=\s*[,;]\s*(?:д(?:ом)?\.?|корп(?:ус)?\.?|стр(?:оение)?\.?|кв(?:артира)?\.?)\s|$)",
+        text,
+        re.IGNORECASE,
+    )
+    if street_match:
+        attrs["Улица"] = clean(street_match.group(1))[:128]
+    else:
+        remainder = re.sub(r"(?<!\d)\d{6}(?!\d)", "", text)
+        remainder = re.sub(r"^(?:Россия\s*,?\s*)", "", remainder, flags=re.IGNORECASE)
+        attrs["Улица"] = clean(remainder).strip(" ,")[:128] or "Адрес уточняется"
     return attrs
 
 
@@ -65,9 +83,14 @@ def _set_legal(node: ET.Element | None, data: dict):
     address = node.find(".//Адрес")
     if address is not None:
         _set_address(address, data.get("address", ""))
-    phone = node.find(".//Тлф")
-    if phone is not None:
-        phone.text = data.get("phone") or "+70000000000"
+    contact = node.find(".//Контакт")
+    if contact is None:
+        requisites = node.find(".//РекИдентГО") or node.find(".//РекИдентЗак") or node.find(".//РекИдентГП")
+        contact = ET.SubElement(requisites if requisites is not None else node, "Контакт")
+    phone = contact.find("Тлф")
+    if phone is None:
+        phone = ET.SubElement(contact, "Тлф")
+    phone.text = data.get("phone") or "+70000000000"
 
 
 def _as_datetime(value, fallback: datetime) -> datetime:
@@ -153,10 +176,10 @@ class Generator:
             "seals": ", ".join(dict.fromkeys(filter(None, [clean(value(row, "Номер пломбы")), clean(value(row, "Номер пломбы 2"))]))),
             "loading": clean(value(row, "Место отправления", "Последняя точка прибытия")),
             "delivery": clean(value(row, "Место прибытия", "Последняя точка прибытия", "Места дислокации грузовых единиц")),
-            "delivery_datetime": _as_datetime(value(row, "Плановая дата прибытия", "Последняя план дата прибытия", "ETA (план дата прибытия)"), datetime.combine(trip_date, time(9))),
+            "delivery_datetime": _as_datetime(value(row, "Планируемая дата доставки на склад", "Плановая дата доставки на склад", "Плановая дата прибытия", "Последняя план дата прибытия", "ETA (план дата прибытия)"), datetime.combine(trip_date, time(9))),
             "empty_delivery_datetime": _as_datetime(value(row, "Дата сдачи порожнего"), _as_datetime(value(row, "Плановая дата прибытия", "Последняя план дата прибытия", "ETA (план дата прибытия)"), datetime.combine(trip_date, time(9)))),
             "planned_departure_datetime": _as_datetime(value(row, "Плановая дата отправления"), datetime.combine(trip_date, time(9))),
-            "actual_departure_datetime": _as_datetime(value(row, "Фактическая дата отправления"), _as_datetime(value(row, "Плановая дата отправления"), datetime.combine(trip_date, time(9)))),
+            "actual_departure_datetime": _as_datetime(value(row, "Плановая дата отправления"), datetime.combine(trip_date, time(9))),
             "stock": stock,
         }
 
@@ -217,7 +240,7 @@ class Generator:
         loading = info.find("СвПогруз")
         loading.set("ЗаявПогр", planned_departure.isoformat() + "+03:00")
         loading.set("ФДатВрПриб", actual_departure.isoformat() + "+03:00")
-        loading.set("ФДатВрУбыт", actual_departure.isoformat() + "+03:00")
+        loading.set("ФДатВрУбыт", (actual_departure + timedelta(hours=1)).isoformat() + "+03:00")
         loading.set("МасБрутОтгр", "0" if empty else ctx["weight"])
         physical_loading = ctx["delivery"] if empty else ctx["loading"]
         _set_address(loading.find("ФАдресПогр"), physical_loading, "АдресРФ")
