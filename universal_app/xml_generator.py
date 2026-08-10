@@ -113,6 +113,10 @@ def _as_datetime(value, fallback: datetime) -> datetime:
     return fallback
 
 
+def _epd_datetime(value: datetime) -> str:
+    return value.strftime("%d.%m.%YT%H:%M:%S+03:00")
+
+
 def _fio(full_name: str) -> dict:
     parts = clean(full_name).split()
     return {
@@ -213,7 +217,7 @@ class Generator:
         delivery_time = ctx["empty_delivery_datetime"] if empty else ctx["delivery_datetime"]
         instructions = info.find("УказГО")
         if instructions is not None:
-            instructions.set("ДатВрДостГр", delivery_time.isoformat() + "+03:00")
+            instructions.set("ДатВрДостГр", _epd_datetime(delivery_time))
             if not empty and ctx.get("seals"):
                 instructions.set("СвПломба", ctx["seals"])
             else:
@@ -238,9 +242,9 @@ class Generator:
         planned_departure = ctx["planned_departure_datetime"]
         actual_departure = ctx["actual_departure_datetime"]
         loading = info.find("СвПогруз")
-        loading.set("ЗаявПогр", planned_departure.isoformat() + "+03:00")
-        loading.set("ФДатВрПриб", actual_departure.isoformat() + "+03:00")
-        loading.set("ФДатВрУбыт", (actual_departure + timedelta(hours=1)).isoformat() + "+03:00")
+        loading.set("ЗаявПогр", _epd_datetime(planned_departure))
+        loading.set("ФДатВрПриб", _epd_datetime(actual_departure))
+        loading.set("ФДатВрУбыт", _epd_datetime(actual_departure + timedelta(hours=1)))
         loading.set("МасБрутОтгр", "0" if empty else ctx["weight"])
         physical_loading = ctx["delivery"] if empty else ctx["loading"]
         _set_address(loading.find("ФАдресПогр"), physical_loading, "АдресРФ")
@@ -288,11 +292,11 @@ class Generator:
         _set_legal(info.find("СвПрв"), ctx["carrier"])
         start = datetime.combine(ctx["date"], time(9))
         point = info.find("ПунктПод")
-        point.set("ДатВрПод", start.isoformat() + "+03:00")
+        point.set("ДатВрПод", _epd_datetime(start))
         _set_address(point.find("АдрПунктПод/Адрес"), ctx["loading"])
         route_points = info.findall("АдрПункт")
-        route_points[0].set("ДатВрОпер", start.isoformat() + "+03:00")
-        route_points[1].set("ДатВрОпер", (start + timedelta(hours=8)).isoformat() + "+03:00")
+        route_points[0].set("ДатВрОпер", _epd_datetime(start))
+        route_points[1].set("ДатВрОпер", _epd_datetime(start + timedelta(hours=8)))
         _set_address(route_points[0].find("АдресПункт/Адрес"), ctx["loading"])
         _set_address(route_points[1].find("АдресПункт/Адрес"), ctx["delivery"])
         cargo = info.find("ОпГруз")
