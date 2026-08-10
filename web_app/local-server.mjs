@@ -15,6 +15,20 @@ const cacheRoot = path.join(root,"work","source-cache");
 const credentialsFile = path.join(root,"work","tms-credentials.json");
 const referenceRoot = process.env.AGR_REFERENCES_DIR || path.join(root,"..","data","references");
 
+const sourceFiles = {
+  cargo: () => path.join(cacheRoot,"cargo.xlsx"),
+  auto: () => path.join(cacheRoot,"auto.xlsx"),
+  points: () => path.join(referenceRoot,"route-points.xlsx"),
+};
+function sourceStatus() {
+  return Object.fromEntries(Object.entries(sourceFiles).map(([kind,getFile])=>{
+    const file=getFile();
+    if(!fs.existsSync(file)) return [kind,null];
+    const stat=fs.statSync(file);
+    return [kind,{available:true,updatedAt:stat.mtime.toISOString(),size:stat.size}];
+  }));
+}
+
 function readTmsCredentials() {
   if (process.env.TMS_LOGIN && process.env.TMS_PASSWORD) return {login:process.env.TMS_LOGIN,password:process.env.TMS_PASSWORD};
   if (!fs.existsSync(credentialsFile)) return null;
@@ -60,11 +74,15 @@ const types = { ".css":"text/css; charset=utf-8", ".js":"text/javascript; charse
 const server = http.createServer((request, response) => {
   const url = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
   if (request.method === "GET" && url.pathname === "/api/tms-status") {
-    response.writeHead(200,{"Content-Type":"application/json; charset=utf-8"}); response.end(JSON.stringify({configured:fs.existsSync(credentialsFile)})); return;
+    const configured=Boolean((process.env.TMS_LOGIN&&process.env.TMS_PASSWORD)||fs.existsSync(credentialsFile));
+    response.writeHead(200,{"Content-Type":"application/json; charset=utf-8"});
+    response.end(JSON.stringify({configured,sources:sourceStatus()})); return;
   }
   if (request.method === "GET" && url.pathname === "/api/source-cache") {
-    const kind=url.searchParams.get("kind"); const file=path.join(cacheRoot,kind==="cargo"?"cargo.xlsx":kind==="auto"?"auto.xlsx":"-");
-    if(!["cargo","auto"].includes(kind||"")||!fs.existsSync(file)){response.writeHead(404);response.end();return;}
+    const kind=url.searchParams.get("kind");
+    const getFile=sourceFiles[kind||""];
+    const file=getFile?.();
+    if(!file||!fs.existsSync(file)){response.writeHead(404);response.end();return;}
     response.writeHead(200,{"Content-Type":"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet","Content-Disposition":`attachment; filename="${kind}.xlsx"`}); fs.createReadStream(file).pipe(response); return;
   }
   if (request.method === "POST" && url.pathname === "/api/tms-update") {

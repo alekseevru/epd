@@ -15,7 +15,7 @@ const openSourceDb = () => new Promise<IDBDatabase>((resolve,reject) => {
 const saveSourceFile=async(key:string,file:File)=>{const db=await openSourceDb();await new Promise<void>((resolve,reject)=>{const tx=db.transaction("files","readwrite");tx.objectStore("files").put(file,key);tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);});db.close();};
 const getSourceFile=async(key:string)=>{const db=await openSourceDb();const file=await new Promise<File|undefined>((resolve,reject)=>{const request=db.transaction("files").objectStore("files").get(key);request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);});db.close();return file;};
 const clearSourceFiles=async()=>{const db=await openSourceDb();await new Promise<void>((resolve,reject)=>{const tx=db.transaction("files","readwrite");tx.objectStore("files").clear();tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);});db.close();};
-type Source = { name: string; count: number };
+type Source = { name: string; count: number; origin?: string; updatedAt?: string };
 type Trip = Row & { _container: string; _cargo?: Row; _auto?: Row; _missingCargo?: boolean; _missingAuto?: boolean };
 
 const value = (row: Row | undefined, ...keys: string[]) => {
@@ -82,18 +82,35 @@ export default function Workspace() {
     if(restoredRef.current) return; restoredRef.current=true;
     void (async()=>{
       try {
+        const statusResponse=await fetch("/api/tms-status");
+        if(!statusResponse.ok) throw new Error("Статус TMS недоступен");
+        const status=await statusResponse.json() as {sources?:Record<string,{available:boolean;updatedAt:string}|null>};
+        const restoreServer=async(kind:"cargo"|"auto"|"points",name:string)=>{
+          const info=status.sources?.[kind];
+          if(!info?.available) return false;
+          const response=await fetch("/api/source-cache?kind="+kind);
+          if(!response.ok) return false;
+          await load(kind,new File([await response.blob()],name),false,info.updatedAt);
+          return true;
+        };
+        const [serverCargo,serverAuto]=await Promise.all([restoreServer("cargo","TMS · Грузы текущие.xlsx"),restoreServer("auto","TMS · ТТН-CMR.xlsx")]);
+        if(serverCargo&&serverAuto) {
+          await restoreServer("points","TMS · Точки маршрута.xlsx");
+          setMessage("Используются сохранённые на сервере данные TMS. Можно продолжать поиск.");
+          return;
+        }
         const [cargo,auto,routePoints]=await Promise.all([getSourceFile("cargo"),getSourceFile("auto"),getSourceFile("points")]);
         if(cargo||auto) setMessage("Восстанавливаем ранее подключённые реестры…");
         if(cargo) await load("cargo",cargo); if(auto) await load("auto",auto); if(routePoints) await load("points",routePoints);
-        if(cargo&&auto) setMessage("Реестры восстановлены автоматически. Можно продолжать поиск.");
-      } catch { setMessage("Не удалось восстановить сохранённые реестры. Выберите файлы заново."); }
+        if(cargo&&auto) setMessage("Реестры восстановлены из этого браузера. Можно продолжать поиск.");
+      } catch { setMessage("Сохранённых реестров пока нет. Обновите данные из TMS."); }
     })();
   }, []);
 
   const resetSources=async()=>{await clearSourceFiles();setCargoRows([]);setAutoRows([]);setPoints([]);setCargoSource(null);setAutoSource(null);setPointsSource(null);setResults([]);setQuery("");setMessage("Сохранённые реестры удалены. Подключите актуальные файлы.");};
 
   const ready = Boolean(cargoSource && autoSource);
-  const cargoIndex = useMemo(() => new Map(cargoRows.map((row) => [rowContainer(row), row]).filter(([key]) => key)), [cargoRows]);
+  const cargoIndex = useMemo(() => new Map<string,Row>(cargoRows.map((row):[string,Row] => [rowContainer(row),row]).filter(([key]) => Boolean(key))), [cargoRows]);
   const autoIndex = useMemo(() => {
     const map = new Map<string, Row>();
     autoRows.forEach((row) => { const key = rowContainer(row); if (key) map.set(key, row); });
@@ -116,18 +133,21 @@ export default function Workspace() {
     return value(auto, "Место отправления") || start || "Адрес отправления не найден";
   };
 
-  async function load(kind: "cargo" | "auto" | "points", file: File) {
+  async function load(kind: "cargo" | "auto" | "points", file: File, cacheOnServer = true, updatedAt?: string) {
     setBusy(true);
     try {
       const expected = kind === "cargo" ? "OPERATION_UNIT" : kind === "auto" ? "OPERATION_SUB_DOC" : "LIST_WAREHOUSE";
       const rows = await readWorkbook(file, expected);
       if (!rows.length) throw new Error("В выбранном файле нет строк");
-      if (kind === "cargo") { setCargoRows(rows); setCargoSource({name:file.name,count:rows.length}); }
-      if (kind === "auto") { setAutoRows(rows); setAutoSource({name:file.name,count:rows.length}); }
-      if (kind === "points") { setPoints(rows); setPointsSource({name:file.name,count:rows.length}); }
+      const source={name:file.name,count:rows.length,origin:cacheOnServer?"Загружен вручную":"Сохранён на сервере",updatedAt};
+      if (kind === "cargo") { setCargoRows(rows); setCargoSource(source); }
+      if (kind === "auto") { setAutoRows(rows); setAutoSource(source); }
+      if (kind === "points") { setPoints(rows); setPointsSource(source); }
       await saveSourceFile(kind,file);
-      const cached=await fetch("/api/cache-source?kind="+kind,{method:"POST",body:file});
-      if(!cached.ok) throw new Error("Не удалось передать реестр локальному генератору");
+      if(cacheOnServer) {
+        const cached=await fetch("/api/cache-source?kind="+kind,{method:"POST",body:file});
+        if(!cached.ok) throw new Error("Не удалось сохранить реестр на сервере");
+      }
       setMessage(kind === "points" ? "Справочник точек маршрута подключён" : "Файл подключён. Добавьте второй обязательный реестр.");
     } catch (error) { setMessage(error instanceof Error ? error.message : "Не удалось прочитать файл"); }
     finally { setBusy(false); }
@@ -144,11 +164,12 @@ export default function Workspace() {
       const processLine=(line:string)=>{if(!line.trim())return;const event=JSON.parse(line);if(event.type==="status")setTmsStatuses(current=>({...current,[event.key]:{state:event.state,message:event.message}}));if(event.type==="fatal")throw new Error(event.error);if(event.type==="complete")completeResult=event.result;};
       while(true){const {done,value}=await reader.read();buffer+=decoder.decode(value||new Uint8Array(),{stream:!done});const lines=buffer.split(/\r?\n/);buffer=lines.pop()||"";for(const line of lines)processLine(line);if(done)break;} if(buffer)processLine(buffer);
       if(!completeResult) throw new Error("TMS не подтвердила завершение обновления");
-      const [cargoResponse,autoResponse]=await Promise.all([fetch("/api/source-cache?kind=cargo"),fetch("/api/source-cache?kind=auto")]);
-      if(!cargoResponse.ok||!autoResponse.ok) throw new Error("Данные получены, но локальные реестры не открылись");
+      const [cargoResponse,autoResponse,pointsResponse]=await Promise.all([fetch("/api/source-cache?kind=cargo"),fetch("/api/source-cache?kind=auto"),fetch("/api/source-cache?kind=points")]);
+      if(!cargoResponse.ok||!autoResponse.ok||!pointsResponse.ok) throw new Error("Данные получены, но сохранённые реестры не открылись");
       const stamp=new Date().toLocaleString("ru-RU");
-      await load("cargo",new File([await cargoResponse.blob()],"TMS Грузы текущие · "+stamp+".xlsx"));
-      await load("auto",new File([await autoResponse.blob()],"TMS ТТН-CMR · "+stamp+".xlsx"));
+      await load("cargo",new File([await cargoResponse.blob()],"TMS Грузы текущие · "+stamp+".xlsx"),false,new Date().toISOString());
+      await load("auto",new File([await autoResponse.blob()],"TMS ТТН-CMR · "+stamp+".xlsx"),false,new Date().toISOString());
+      await load("points",new File([await pointsResponse.blob()],"TMS Точки маршрута · "+stamp+".xlsx"),false,new Date().toISOString());
       setMessage("Данные и справочники TMS успешно обновлены");
     } catch(error) { const message=error instanceof Error?error.message:"Ошибка обновления TMS";setMessage(message);setTmsStatuses(current=>({...current,apply:{state:"error",message}})); }
     finally { setTmsBusy(false); }
@@ -225,7 +246,15 @@ export default function Workspace() {
     <header className={styles.topbar}><div className={styles.logo}>А</div><div><strong>Создание ЭПД</strong><span>локальная версия</span></div><i/><b>{ready ? "База подключена" : "Нужны 2 файла"}</b></header>
     <section className={styles.content}>
       <div className={styles.notice}>{busy ? "Читаем файл…" : message}</div>
-      <section className={styles.tmsPanel}><div className={styles.tmsBar}><div><strong>Загрузить актуальные данные из TMS</strong><small>«Грузы → Текущие» и «ТТН / CMR»</small></div><button disabled={tmsBusy || busy} onClick={updateFromTms}>{tmsBusy ? "Обновляем…" : "Обновить реестры из TMS"}</button></div><details className={styles.tmsCredentials}><summary>Данные входа TMS</summary><p>Заполняйте, только если доступ не настроен администратором сервера. Пароль не сохраняется в браузере.</p><div><label><span>Логин</span><input autoComplete="username" value={tmsLogin} onChange={event=>setTmsLogin(event.target.value)} placeholder="Логин TMS"/></label><label><span>Пароль</span><input type="password" autoComplete="current-password" value={tmsPassword} onChange={event=>setTmsPassword(event.target.value)} placeholder="Пароль TMS"/></label></div></details></section>
+      <section className={styles.tmsPanel}>
+        <div className={styles.tmsBar}><div><strong>Сохранённые данные TMS</strong><small>После обновления доступны всем сотрудникам и автоматически открываются при следующем входе.</small></div><button disabled={tmsBusy || busy} onClick={updateFromTms}>{tmsBusy ? "Обновляем…" : ready ? "Обновить данные" : "Загрузить данные из TMS"}</button></div>
+        <div className={styles.tmsSources}>
+          {[{title:"Грузы → Текущие",source:cargoSource},{title:"ТТН / CMR",source:autoSource},{title:"Точки маршрута",source:pointsSource}].map(({title,source})=>
+            <article key={title} className={source?styles.sourceReady:styles.sourceMissing}><b>{source?"✓":"—"}</b><span><strong>{title}</strong><small>{source?`${source.count.toLocaleString("ru-RU")} строк · ${source.origin}`:"Нет сохранённых данных"}</small>{source?.updatedAt&&<em>Обновлено {new Date(source.updatedAt).toLocaleString("ru-RU")}</em>}</span></article>
+          )}
+        </div>
+        <details className={styles.tmsCredentials}><summary>Данные входа TMS</summary><p>Заполняйте, только если доступ не настроен администратором сервера. Пароль не сохраняется в браузере.</p><div><label><span>Логин</span><input autoComplete="username" value={tmsLogin} onChange={event=>setTmsLogin(event.target.value)} placeholder="Логин TMS"/></label><label><span>Пароль</span><input type="password" autoComplete="current-password" value={tmsPassword} onChange={event=>setTmsPassword(event.target.value)} placeholder="Пароль TMS"/></label></div></details>
+      </section>
       <details className={styles.manualPanel}><summary>Ручная загрузка и восстановление</summary><p>Используйте этот раздел, только если TMS временно недоступна или нужно проверить отдельную выгрузку.</p><div><button onClick={() => cargoRef.current?.click()}><strong>Реестр грузов</strong><small>{cargoSource?.name ?? "Выбрать OPERATION_UNIT"}</small></button><button onClick={() => autoRef.current?.click()}><strong>ТТН / CMR</strong><small>{autoSource?.name ?? "Выбрать OPERATION_SUB_DOC"}</small></button><button onClick={() => pointsRef.current?.click()}><strong>Точки маршрута</strong><small>{pointsSource?.name ?? "Выбрать LIST_WAREHOUSE"}</small></button><button className={styles.resetButton} onClick={resetSources}>Сбросить локальную базу</button></div><input ref={cargoRef} hidden type="file" accept=".xlsx,.xls" onChange={handleFile("cargo")}/><input ref={autoRef} hidden type="file" accept=".xlsx,.xls" onChange={handleFile("auto")}/><input ref={pointsRef} hidden type="file" accept=".xlsx,.xls" onChange={handleFile("points")}/></details>
 
       {!ready && <section className={styles.startPanel}><div className={styles.startTitle}><small>ШАГ 1</small><h2>Обновите данные из TMS</h2><p>Нажмите кнопку выше. После получения грузов и ТТН/CMR автоматически откроется поиск перевозок.</p></div></section>}
