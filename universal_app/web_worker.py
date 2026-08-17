@@ -69,6 +69,9 @@ def handle(request):
     if not stock and instruction: stock = {"Название":instruction,"Адрес":instruction,"Адрес на русском языке":instruction}
     ctx = generator.context(row, date.fromisoformat(request.get("date") or date.today().isoformat()), request.get("user") or "Алексеев Михаил Геннадьевич", stock)
     kind = request["kind"]
+    warnings = generator.warnings(ctx, empty=kind == "empty", ezz=kind == "order")
+    if warnings and not request.get("confirmWarnings"):
+        return {"requiresConfirmation": True, "warnings": warnings}
     if kind == "cargo": filename, content = generator.etrn(ctx, False)
     elif kind == "empty": filename, content = generator.etrn(ctx, True)
     elif kind == "order": filename, content = generator.ezz(ctx)

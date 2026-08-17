@@ -6,6 +6,7 @@ const BASE = "https://bln-log02.ylrus.com";
 
 const cargoFields = {
   ID: "Номер записи",
+  CREATE_DATE: "Дата создания строки",
   UNIT_NUMBER: "Грузовая единица",
   ORDER_COMPANY_CLIENT_NAME: "Клиент",
   ORDER_COMPANY_PARTNER_NAME: "Партнер",
@@ -53,6 +54,7 @@ const warehouseFields = {
 
 const autoFields = {
   ID: "Номер записи",
+  CREATE_DATE: "Дата создания строки",
   ID_OPERATION_TYPE: "Тип операции",
   UNITS_NUMBERS: "Номера грузовых единиц",
   DOC_PARENT_ORDER_COMPANY_CLIENT_NAME: "Клиент",
@@ -134,9 +136,13 @@ export async function syncTms({ login: loginName, password, cacheDir, referenceD
   let session;
   try { session = await login(loginName, password); onStatus("login","saved","Вход выполнен"); }
   catch(error) { onStatus("login","error","TMS недоступна или не приняла данные входа"); throw error; }
-  const autoFilter = { tryNewFilterFormat: true, value: [["ID_OPERATION_TYPE", "=", 1]] };
+  const fourMonthsAgo = new Date();
+  fourMonthsAgo.setMonth(fourMonthsAgo.getMonth() - 4);
+  const createdSince = fourMonthsAgo.toISOString().slice(0, 10);
+  const cargoFilter = { tryNewFilterFormat: true, value: [["CREATE_DATE", ">=", createdSince]] };
+  const autoFilter = { tryNewFilterFormat: true, value: [["ID_OPERATION_TYPE", "=", 1], ["CREATE_DATE", ">=", createdSince]] };
   const tasks = [
-    ["cargo","OPERATION_UNIT",cargoFields,autoFilter && null,cacheDir,"cargo.xlsx"],
+    ["cargo","OPERATION_UNIT",cargoFields,cargoFilter,cacheDir,"cargo.xlsx"],
     ["auto","OPERATION_SUB_DOC",autoFields,autoFilter,cacheDir,"auto.xlsx"],
     ["companies","LIST_COMPANY",companyFields,null,referenceDir,"companies.xlsx"],
     ["vehicles","LIST_AUTO",vehicleFields,null,referenceDir,"vehicles.xlsx"],

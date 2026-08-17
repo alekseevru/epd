@@ -54,6 +54,7 @@ export default function Workspace() {
   const cargoRef = useRef<HTMLInputElement>(null);
   const autoRef = useRef<HTMLInputElement>(null);
   const pointsRef = useRef<HTMLInputElement>(null);
+  const contractsRef = useRef<HTMLInputElement>(null);
   const outputRef = useRef<DirectoryHandle | null>(null);
   const containerFoldersRef = useRef<Record<string,DirectoryHandle>>({});
   const [cargoRows, setCargoRows] = useState<Row[]>([]);
@@ -73,6 +74,7 @@ export default function Workspace() {
   const [tmsStatuses, setTmsStatuses] = useState<Record<string,{state:"queued"|"working"|"saved"|"error";message:string}>>({});
   const [generating, setGenerating] = useState("");
   const [outputFolder, setOutputFolder] = useState("");
+  const [employee, setEmployee] = useState("Алексеев Михаил Геннадьевич");
   const [bulkProgress, setBulkProgress] = useState("");
   const [statusModalOpen, setStatusModalOpen] = useState(false);
   const [docStatuses, setDocStatuses] = useState<Record<string,{state:"queued"|"working"|"saved"|"error";text:string}>>({});
@@ -179,6 +181,17 @@ export default function Workspace() {
     const file = event.target.files?.[0]; if (file) void load(kind, file);
   };
 
+  const handleContractsFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file=event.target.files?.[0]; if(!file)return;
+    try{
+      const response=await fetch("/api/cache-source?kind=contracts",{method:"POST",body:file});
+      const result=await response.json();
+      if(!response.ok)throw new Error(result.error||"Не удалось загрузить справочник договоров");
+      setMessage(result.unchanged?"Справочник договоров не изменился":"Справочник договоров сохранён и применён");
+    }catch(error){setMessage(error instanceof Error?error.message:"Не удалось загрузить справочник договоров");}
+    finally{event.target.value="";}
+  };
+
   const search = () => {
     if (!ready) return setMessage("Сначала подключите оба обязательных реестра");
     const containers = Array.from(new Set(query.split(/[\s,;]+/).map(normalizeContainer).filter(Boolean)));
@@ -203,8 +216,18 @@ export default function Workspace() {
     if (!quiet) { setGenerating(key); setMessage("Формируем документ для " + trip._container + "…"); }
     try {
       const row = { ...(trip._cargo ?? {}), ...(trip._auto ?? {}) };
-      const response = await fetch("/api/generate", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({kind,container:trip._container,row,date:new Date().toISOString().slice(0,10),user:"Алексеев Михаил Геннадьевич"}) });
-      const result = await response.json();
+      const requestDocument = async (confirmWarnings = false) => {
+        const response = await fetch("/api/generate", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({kind,container:trip._container,row,date:new Date().toISOString().slice(0,10),user:employee.trim(),confirmWarnings}) });
+        return {response,result:await response.json()};
+      };
+      let {response,result} = await requestDocument();
+      if (result.requiresConfirmation) {
+        const warnings = (result.warnings as string[]).map((item,index)=>`${index+1}. ${item}`).join("\n");
+        if (!window.confirm(`Перед формированием ${trip._container} проверьте данные:\n\n${warnings}\n\nПродолжить формирование?`)) {
+          throw new Error("Формирование отменено: необходимо дополнить данные");
+        }
+        ({response,result} = await requestDocument(true));
+      }
       if (!response.ok || result.error) throw new Error(result.error || "Не удалось сформировать документ");
       const bytes = Uint8Array.from(atob(result.content), (char) => char.charCodeAt(0));
       const blob = new Blob([bytes], {type:"application/xml"});
@@ -241,6 +264,16 @@ export default function Workspace() {
 
   const kindTitle=(key:string)=>key.endsWith("cargo")?"ЭТрН груз":key.endsWith("order")?"Заявка перевозчику":"ЭТрН порожний";
   const keyContainer=(key:string)=>key.replace(/(cargo|order|empty)$/,"");
+  const tripDocumentSummary=(container:string,ok:boolean,missingCargo:boolean)=>{
+    if(!ok)return {tone:"warning",title:"Недостаточно данных",detail:missingCargo?"Не найден груз":"Не найдена автоперевозка"};
+    const states=["cargo","order","empty"].map(kind=>docStatuses[container+kind]?.state);
+    const saved=states.filter(state=>state==="saved").length;
+    const errors=states.filter(state=>state==="error").length;
+    if(errors)return {tone:"rowError",title:"Есть ошибки",detail:`Не создано: ${errors} из 3`};
+    if(saved===3)return {tone:"ok",title:"Комплект готов",detail:"Создано 3 из 3"};
+    if(states.some(state=>state==="working"||state==="queued"))return {tone:"rowWorking",title:"Формируется",detail:`Готово ${saved} из 3`};
+    return {tone:"rowPending",title:"Не сформировано",detail:`Готово ${saved} из 3`};
+  };
 
   return <main className={styles.shell}>
     <header className={styles.topbar}><div className={styles.logo}>А</div><div><strong>Создание ЭПД</strong><span>локальная версия</span></div><i/><b>{ready ? "База подключена" : "Нужны 2 файла"}</b></header>
@@ -255,22 +288,22 @@ export default function Workspace() {
         </div>
         <details className={styles.tmsCredentials}><summary>Данные входа TMS</summary><p>Заполняйте, только если доступ не настроен администратором сервера. Пароль не сохраняется в браузере.</p><div><label><span>Логин</span><input autoComplete="username" value={tmsLogin} onChange={event=>setTmsLogin(event.target.value)} placeholder="Логин TMS"/></label><label><span>Пароль</span><input type="password" autoComplete="current-password" value={tmsPassword} onChange={event=>setTmsPassword(event.target.value)} placeholder="Пароль TMS"/></label></div></details>
       </section>
-      <details className={styles.manualPanel}><summary>Ручная загрузка и восстановление</summary><p>Используйте этот раздел, только если TMS временно недоступна или нужно проверить отдельную выгрузку.</p><div><button onClick={() => cargoRef.current?.click()}><strong>Реестр грузов</strong><small>{cargoSource?.name ?? "Выбрать OPERATION_UNIT"}</small></button><button onClick={() => autoRef.current?.click()}><strong>ТТН / CMR</strong><small>{autoSource?.name ?? "Выбрать OPERATION_SUB_DOC"}</small></button><button onClick={() => pointsRef.current?.click()}><strong>Точки маршрута</strong><small>{pointsSource?.name ?? "Выбрать LIST_WAREHOUSE"}</small></button><button className={styles.resetButton} onClick={resetSources}>Сбросить локальную базу</button></div><input ref={cargoRef} hidden type="file" accept=".xlsx,.xls" onChange={handleFile("cargo")}/><input ref={autoRef} hidden type="file" accept=".xlsx,.xls" onChange={handleFile("auto")}/><input ref={pointsRef} hidden type="file" accept=".xlsx,.xls" onChange={handleFile("points")}/></details>
+      <details className={styles.manualPanel}><summary>Ручная загрузка и восстановление</summary><p>Используйте этот раздел, только если TMS временно недоступна или нужно проверить отдельную выгрузку.</p><div><button onClick={() => cargoRef.current?.click()}><strong>Реестр грузов</strong><small>{cargoSource?.name ?? "Выбрать OPERATION_UNIT"}</small></button><button onClick={() => autoRef.current?.click()}><strong>ТТН / CMR</strong><small>{autoSource?.name ?? "Выбрать OPERATION_SUB_DOC"}</small></button><button onClick={() => pointsRef.current?.click()}><strong>Точки маршрута</strong><small>{pointsSource?.name ?? "Выбрать LIST_WAREHOUSE"}</small></button><button onClick={()=>contractsRef.current?.click()}><strong>Договоры</strong><small>Загрузить contracts.json</small></button><button className={styles.resetButton} onClick={resetSources}>Сбросить локальную базу</button></div><input ref={cargoRef} hidden type="file" accept=".xlsx,.xls" onChange={handleFile("cargo")}/><input ref={autoRef} hidden type="file" accept=".xlsx,.xls" onChange={handleFile("auto")}/><input ref={pointsRef} hidden type="file" accept=".xlsx,.xls" onChange={handleFile("points")}/><input ref={contractsRef} hidden type="file" accept=".json,application/json" onChange={handleContractsFile}/></details>
 
       {!ready && <section className={styles.startPanel}><div className={styles.startTitle}><small>ШАГ 1</small><h2>Обновите данные из TMS</h2><p>Нажмите кнопку выше. После получения грузов и ТТН/CMR автоматически откроется поиск перевозок.</p></div></section>}
 
       {ready && <>
         <section className={styles.search}><label><strong>Номера контейнеров</strong><textarea value={query} onChange={(event) => setQuery(event.target.value)} placeholder={'WEDU8636223\nTGBU5962912'}/></label><button onClick={search}>Найти перевозки →</button></section>
-        {results.length > 0 && <><section className={styles.bulkBar}><div><strong>Формирование документов</strong><small>{outputFolder ? "Папка: " + outputFolder : "Сначала выберите папку для XML"}</small></div><button className={styles.folderButton} onClick={chooseOutputFolder}>Выбрать папку</button><button className={styles.bulkButton} disabled={Boolean(generating)} onClick={generateAll}>{generating === "all" ? (bulkProgress || "Формируем…") : "Создать все документы"}</button></section><section className={styles.results}><div className={styles.tableWrap}><table><thead><tr><th>Контейнер</th><th>Клиент</th><th>Перевозчик</th><th>Маршрут</th><th>Адрес отправления</th><th>Склад клиента</th><th>Контейнерный сток</th><th>Водитель и ТС</th><th>Документы</th><th>Статус</th></tr></thead><tbody>{results.map((trip) => {
+        {results.length > 0 && <><section className={styles.bulkBar}><div><strong>Формирование документов</strong><small>{outputFolder ? "Папка: " + outputFolder : "Сначала выберите папку для XML"}</small></div><label className={styles.employeeField}><span>Сотрудник</span><input value={employee} onChange={event=>setEmployee(event.target.value)} placeholder="Фамилия Имя Отчество"/></label><button className={styles.folderButton} onClick={chooseOutputFolder}>Выбрать папку</button><button className={styles.bulkButton} disabled={Boolean(generating)} onClick={generateAll}>{generating === "all" ? (bulkProgress || "Формируем…") : "Создать все документы"}</button></section><section className={styles.results}><div className={styles.tableWrap}><table><thead><tr><th>Контейнер</th><th>Клиент</th><th>Перевозчик</th><th>Маршрут</th><th>Адрес отправления</th><th>Склад клиента</th><th>Контейнерный сток</th><th>Водитель и ТС</th><th>Документы</th><th>Статус</th></tr></thead><tbody>{results.map((trip) => {
           const cargo = trip._cargo; const auto = trip._auto;
           const warehouse = value(cargo,"Место доставки на склад","Место доставки груза (Маршрут заказа)","Адрес доставки","Место прибытия") || value(auto,"Место прибытия");
           const stock = value(cargo,"Контейнерный сток","Инструкция на сдачу порожнего","Перенаправление сдачи порожнего") || value(auto,"Контейнерный сток","Инструкция на сдачу порожнего","Перенаправление сдачи порожнего");
           const ok = !trip._missingCargo && !trip._missingAuto;
-          return <tr key={trip._container}><td><strong>{trip._container}</strong></td><td>{value(cargo,"Клиент") || value(auto,"Клиент") || '—'}</td><td><strong>{value(auto,"Исполнитель","Партнер","Перевозчик") || '—'}</strong></td><td>{value(auto,"Маршрут") || '—'}</td><td>{resolveDeparture(auto)}</td><td>{warehouse || '—'}</td><td>{stock || 'Нужно заполнить'}</td><td><strong>{value(auto,"Водитель") || '—'}</strong><small>{value(auto,"Номер автомашины","Транспортное средство")}</small></td><td><div className={styles.docActions}><button disabled={!ok || Boolean(generating)} onClick={() => generateDocument(trip,"cargo")}><span>ЭТрН груз</span><small className={styles[docStatuses[trip._container+"cargo"]?.state]}>{docStatuses[trip._container+"cargo"]?.text ?? "Не запускался"}</small></button><button disabled={!ok || Boolean(generating)} onClick={() => generateDocument(trip,"order")}><span>Заявка</span><small className={styles[docStatuses[trip._container+"order"]?.state]}>{docStatuses[trip._container+"order"]?.text ?? "Не запускалась"}</small></button><button disabled={!ok || Boolean(generating)} onClick={() => generateDocument(trip,"empty")}><span>ЭТрН порожний</span><small className={styles[docStatuses[trip._container+"empty"]?.state]}>{docStatuses[trip._container+"empty"]?.text ?? "Не запускался"}</small></button><button className={styles.konturButton} disabled title="Будет доступно после подключения API Контур.Логистики">Черновик в Контур</button></div></td><td><span className={ok ? styles.ok : styles.warning}>{ok ? 'Готово' : trip._missingCargo ? 'Нет груза' : 'Нет автоперевозки'}</span></td></tr>;
+          return <tr key={trip._container}><td><strong>{trip._container}</strong></td><td>{value(cargo,"Клиент") || value(auto,"Клиент") || '—'}</td><td><strong>{value(auto,"Исполнитель","Партнер","Перевозчик") || '—'}</strong></td><td>{value(auto,"Маршрут") || '—'}</td><td>{resolveDeparture(auto)}</td><td>{warehouse || '—'}</td><td>{stock || 'Нужно заполнить'}</td><td><strong>{value(auto,"Водитель") || '—'}</strong><small>{value(auto,"Номер автомашины","Транспортное средство")}</small></td><td><div className={styles.docActions}><button disabled={!ok || Boolean(generating)} onClick={() => generateDocument(trip,"cargo")}><b className={styles.documentIcon}>Г</b><span>ЭТрН на груз</span><small className={styles[docStatuses[trip._container+"cargo"]?.state]}>{docStatuses[trip._container+"cargo"]?.text ?? "Не сформирован"}</small></button><button className={styles.konturButton} disabled title="Передача черновика станет доступна после подключения API Контур.Логистики" aria-label="Передать черновик в Контур">↗<small>Контур</small></button><button disabled={!ok || Boolean(generating)} onClick={() => generateDocument(trip,"order")}><b className={styles.documentIcon}>З</b><span>Заявка перевозчику</span><small className={styles[docStatuses[trip._container+"order"]?.state]}>{docStatuses[trip._container+"order"]?.text ?? "Не сформирована"}</small></button><button className={styles.konturButton} disabled title="Передача черновика станет доступна после подключения API Контур.Логистики" aria-label="Передать черновик в Контур">↗<small>Контур</small></button><button disabled={!ok || Boolean(generating)} onClick={() => generateDocument(trip,"empty")}><b className={styles.documentIcon}>П</b><span>ЭТрН на порожний</span><small className={styles[docStatuses[trip._container+"empty"]?.state]}>{docStatuses[trip._container+"empty"]?.text ?? "Не сформирован"}</small></button><button className={styles.konturButton} disabled title="Передача черновика станет доступна после подключения API Контур.Логистики" aria-label="Передать черновик в Контур">↗<small>Контур</small></button></div></td><td>{(()=>{const summary=tripDocumentSummary(trip._container,ok,Boolean(trip._missingCargo));return <span className={styles[summary.tone]}><strong>{summary.title}</strong><small>{summary.detail}</small></span>;})()}</td></tr>;
         })}</tbody></table></div></section></>}
       </>}
     </section>
-    {tmsModalOpen && <div className={styles.modalBackdrop}><section className={styles.statusModal} role="dialog" aria-modal="true" aria-label="Статус обновления TMS"><header><div><small>ОБНОВЛЕНИЕ ИЗ TMS</small><h2>{tmsBusy?"Получаем актуальные данные":"Обновление завершено"}</h2><p>{tmsBusy?"Статусы меняются автоматически.":message}</p></div><button onClick={()=>setTmsModalOpen(false)} disabled={tmsBusy}>×</button></header><div className={styles.statusList}>{Object.entries(tmsStatuses).map(([key,status])=><article key={key} className={styles[status.state]}><b>{status.state==="saved"?"✓":status.state==="error"?"!":status.state==="working"?"…":"•"}</b><span><strong>{{login:"Вход в TMS",cargo:"Грузы → Текущие",auto:"ТТН / CMR",companies:"Контрагенты",vehicles:"Автомашины",drivers:"Водители",points:"Географические объекты",apply:"Применение справочников"}[key]||key}</strong><small>{status.state==="queued"?"В очереди":status.state==="working"?"Выполняется":status.state==="saved"?"Готово":"Ошибка"}</small></span><em>{status.message}</em></article>)}</div><footer><span>{Object.values(tmsStatuses).filter(item=>item.state==="saved").length} из {Object.keys(tmsStatuses).length} этапов завершено</span><button onClick={()=>setTmsModalOpen(false)} disabled={tmsBusy}>{tmsBusy?"Идёт обновление":"Закрыть"}</button></footer></section></div>}
+    {tmsModalOpen && <div className={styles.modalBackdrop}><section className={styles.statusModal} role="dialog" aria-modal="true" aria-label="Статус обновления TMS"><header><div><small>ОБНОВЛЕНИЕ ИЗ TMS</small><h2>{tmsBusy?"Получаем актуальные данные":"Обновление завершено"}</h2><p>{tmsBusy?"Обновление продолжится в фоне — окно можно закрыть.":message}</p></div><button onClick={()=>setTmsModalOpen(false)}>×</button></header><div className={styles.statusList}>{Object.entries(tmsStatuses).map(([key,status])=><article key={key} className={styles[status.state]}><b>{status.state==="saved"?"✓":status.state==="error"?"!":status.state==="working"?"…":"•"}</b><span><strong>{{login:"Вход в TMS",cargo:"Грузы → Текущие",auto:"ТТН / CMR",companies:"Контрагенты",vehicles:"Автомашины",drivers:"Водители",points:"Географические объекты",apply:"Применение справочников"}[key]||key}</strong><small>{status.state==="queued"?"В очереди":status.state==="working"?"Выполняется":status.state==="saved"?"Готово":"Ошибка"}</small></span><em>{status.message}</em></article>)}</div><footer><span>{Object.values(tmsStatuses).filter(item=>item.state==="saved").length} из {Object.keys(tmsStatuses).length} этапов завершено</span><button onClick={()=>setTmsModalOpen(false)}>{tmsBusy?"Скрыть окно":"Закрыть"}</button></footer></section></div>}
     {statusModalOpen && <div className={styles.modalBackdrop}><section className={styles.statusModal} role="dialog" aria-modal="true" aria-label="Статус формирования документов"><header><div><small>ФОРМИРОВАНИЕ ДОКУМЕНТОВ</small><h2>{generating==="all" ? "Документы формируются" : "Результат формирования"}</h2><p>{bulkProgress || message}</p></div><button onClick={()=>setStatusModalOpen(false)} disabled={generating==="all"}>×</button></header><div className={styles.statusList}>{Object.entries(docStatuses).map(([key,status])=><article key={key} className={styles[status.state]}><b>{status.state==="saved"?"✓":status.state==="error"?"!":status.state==="working"?"…":"•"}</b><span><strong>{keyContainer(key)}</strong><small>{kindTitle(key)}</small></span><em title={status.text}>{status.text}</em></article>)}</div><footer><span>{Object.values(docStatuses).filter(item=>item.state==="saved").length} сохранено · {Object.values(docStatuses).filter(item=>item.state==="error").length} ошибок</span><button onClick={()=>setStatusModalOpen(false)} disabled={generating==="all"}>{generating==="all"?"Дождитесь завершения":"Закрыть"}</button></footer></section></div>}
   </main>;
 }

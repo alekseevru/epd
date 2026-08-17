@@ -19,6 +19,7 @@ const sourceFiles = {
   cargo: () => path.join(cacheRoot,"cargo.xlsx"),
   auto: () => path.join(cacheRoot,"auto.xlsx"),
   points: () => path.join(referenceRoot,"route-points.xlsx"),
+  contracts: () => path.join(referenceRoot,"contracts.json"),
 };
 function sourceStatus() {
   return Object.fromEntries(Object.entries(sourceFiles).map(([kind,getFile])=>{
@@ -56,7 +57,8 @@ function startGeneratorWorker(){
     AGR_EDO_FILE:process.env.AGR_EDO_FILE||path.join(referenceRoot,"counteragents.csv"),
     AGR_VEHICLES_FILE:process.env.AGR_VEHICLES_FILE||path.join(referenceRoot,"vehicles.xlsx"),
     AGR_DRIVERS_FILE:process.env.AGR_DRIVERS_FILE||path.join(referenceRoot,"drivers.xlsx"),
-    AGR_POINTS_FILE:process.env.AGR_POINTS_FILE||path.join(referenceRoot,"route-points.xlsx")}});
+    AGR_POINTS_FILE:process.env.AGR_POINTS_FILE||path.join(referenceRoot,"route-points.xlsx"),
+    AGR_CONTRACTS_FILE:process.env.AGR_CONTRACTS_FILE||path.join(referenceRoot,"contracts.json")}});
   generatorWorker.stdout.setEncoding("utf8");
   generatorWorker.stdout.on("data",chunk=>{
     workerBuffer+=chunk; const lines=workerBuffer.split(/\r?\n/); workerBuffer=lines.pop()||"";
@@ -101,13 +103,21 @@ const server = http.createServer((request, response) => {
   }
   if (request.method === "POST" && url.pathname === "/api/cache-source") {
     const kind = url.searchParams.get("kind");
-    if (!["cargo","auto","points"].includes(kind || "")) { response.writeHead(400); response.end(); return; }
+    if (!["cargo","auto","points","contracts"].includes(kind || "")) { response.writeHead(400); response.end(); return; }
     const chunks=[]; request.on("data",chunk=>chunks.push(chunk)); request.on("end",()=>{
-      const cache=cacheRoot; fs.mkdirSync(cache,{recursive:true});
-      const target=path.join(cache,kind+".xlsx"); const incoming=Buffer.concat(chunks);
-      const unchanged=fs.existsSync(target) && fs.readFileSync(target).equals(incoming);
-      if(!unchanged) fs.writeFileSync(target,incoming);
-      response.writeHead(200,{"Content-Type":"application/json"}); response.end(JSON.stringify({ok:true,unchanged}));
+      try {
+        const cache=cacheRoot; fs.mkdirSync(cache,{recursive:true}); fs.mkdirSync(referenceRoot,{recursive:true});
+        const target=kind==="contracts"?path.join(referenceRoot,"contracts.json"):path.join(cache,kind+".xlsx");
+        const incoming=Buffer.concat(chunks);
+        if(kind==="contracts"){
+          const parsed=JSON.parse(incoming.toString("utf8").replace(/^\uFEFF/,""));
+          if(!Array.isArray(parsed)||parsed.some(item=>!item.client||!item.number)) throw new Error("Некорректный справочник договоров");
+        }
+        const unchanged=fs.existsSync(target) && fs.readFileSync(target).equals(incoming);
+        if(!unchanged) fs.writeFileSync(target,incoming);
+        if(kind==="contracts"&&!unchanged) restartGeneratorWorker();
+        response.writeHead(200,{"Content-Type":"application/json"}); response.end(JSON.stringify({ok:true,unchanged}));
+      } catch(error){response.writeHead(400,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({error:error.message||"Не удалось сохранить справочник"}));}
     }); return;
   }
   if (request.method === "POST" && url.pathname === "/api/generate") {
