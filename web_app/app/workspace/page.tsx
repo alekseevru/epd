@@ -54,6 +54,7 @@ export default function Workspace() {
   const cargoRef = useRef<HTMLInputElement>(null);
   const autoRef = useRef<HTMLInputElement>(null);
   const pointsRef = useRef<HTMLInputElement>(null);
+  const contractsRef = useRef<HTMLInputElement>(null);
   const outputRef = useRef<DirectoryHandle | null>(null);
   const containerFoldersRef = useRef<Record<string,DirectoryHandle>>({});
   const [cargoRows, setCargoRows] = useState<Row[]>([]);
@@ -73,6 +74,7 @@ export default function Workspace() {
   const [tmsStatuses, setTmsStatuses] = useState<Record<string,{state:"queued"|"working"|"saved"|"error";message:string}>>({});
   const [generating, setGenerating] = useState("");
   const [outputFolder, setOutputFolder] = useState("");
+  const [employee, setEmployee] = useState("Алексеев Михаил Геннадьевич");
   const [bulkProgress, setBulkProgress] = useState("");
   const [statusModalOpen, setStatusModalOpen] = useState(false);
   const [docStatuses, setDocStatuses] = useState<Record<string,{state:"queued"|"working"|"saved"|"error";text:string}>>({});
@@ -179,6 +181,17 @@ export default function Workspace() {
     const file = event.target.files?.[0]; if (file) void load(kind, file);
   };
 
+  const handleContractsFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file=event.target.files?.[0]; if(!file)return;
+    try{
+      const response=await fetch("/api/cache-source?kind=contracts",{method:"POST",body:file});
+      const result=await response.json();
+      if(!response.ok)throw new Error(result.error||"Не удалось загрузить справочник договоров");
+      setMessage(result.unchanged?"Справочник договоров не изменился":"Справочник договоров сохранён и применён");
+    }catch(error){setMessage(error instanceof Error?error.message:"Не удалось загрузить справочник договоров");}
+    finally{event.target.value="";}
+  };
+
   const search = () => {
     if (!ready) return setMessage("Сначала подключите оба обязательных реестра");
     const containers = Array.from(new Set(query.split(/[\s,;]+/).map(normalizeContainer).filter(Boolean)));
@@ -203,8 +216,18 @@ export default function Workspace() {
     if (!quiet) { setGenerating(key); setMessage("Формируем документ для " + trip._container + "…"); }
     try {
       const row = { ...(trip._cargo ?? {}), ...(trip._auto ?? {}) };
-      const response = await fetch("/api/generate", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({kind,container:trip._container,row,date:new Date().toISOString().slice(0,10),user:"Алексеев Михаил Геннадьевич"}) });
-      const result = await response.json();
+      const requestDocument = async (confirmWarnings = false) => {
+        const response = await fetch("/api/generate", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({kind,container:trip._container,row,date:new Date().toISOString().slice(0,10),user:employee.trim(),confirmWarnings}) });
+        return {response,result:await response.json()};
+      };
+      let {response,result} = await requestDocument();
+      if (result.requiresConfirmation) {
+        const warnings = (result.warnings as string[]).map((item,index)=>`${index+1}. ${item}`).join("\n");
+        if (!window.confirm(`Перед формированием ${trip._container} проверьте данные:\n\n${warnings}\n\nПродолжить формирование?`)) {
+          throw new Error("Формирование отменено: необходимо дополнить данные");
+        }
+        ({response,result} = await requestDocument(true));
+      }
       if (!response.ok || result.error) throw new Error(result.error || "Не удалось сформировать документ");
       const bytes = Uint8Array.from(atob(result.content), (char) => char.charCodeAt(0));
       const blob = new Blob([bytes], {type:"application/xml"});
@@ -265,13 +288,13 @@ export default function Workspace() {
         </div>
         <details className={styles.tmsCredentials}><summary>Данные входа TMS</summary><p>Заполняйте, только если доступ не настроен администратором сервера. Пароль не сохраняется в браузере.</p><div><label><span>Логин</span><input autoComplete="username" value={tmsLogin} onChange={event=>setTmsLogin(event.target.value)} placeholder="Логин TMS"/></label><label><span>Пароль</span><input type="password" autoComplete="current-password" value={tmsPassword} onChange={event=>setTmsPassword(event.target.value)} placeholder="Пароль TMS"/></label></div></details>
       </section>
-      <details className={styles.manualPanel}><summary>Ручная загрузка и восстановление</summary><p>Используйте этот раздел, только если TMS временно недоступна или нужно проверить отдельную выгрузку.</p><div><button onClick={() => cargoRef.current?.click()}><strong>Реестр грузов</strong><small>{cargoSource?.name ?? "Выбрать OPERATION_UNIT"}</small></button><button onClick={() => autoRef.current?.click()}><strong>ТТН / CMR</strong><small>{autoSource?.name ?? "Выбрать OPERATION_SUB_DOC"}</small></button><button onClick={() => pointsRef.current?.click()}><strong>Точки маршрута</strong><small>{pointsSource?.name ?? "Выбрать LIST_WAREHOUSE"}</small></button><button className={styles.resetButton} onClick={resetSources}>Сбросить локальную базу</button></div><input ref={cargoRef} hidden type="file" accept=".xlsx,.xls" onChange={handleFile("cargo")}/><input ref={autoRef} hidden type="file" accept=".xlsx,.xls" onChange={handleFile("auto")}/><input ref={pointsRef} hidden type="file" accept=".xlsx,.xls" onChange={handleFile("points")}/></details>
+      <details className={styles.manualPanel}><summary>Ручная загрузка и восстановление</summary><p>Используйте этот раздел, только если TMS временно недоступна или нужно проверить отдельную выгрузку.</p><div><button onClick={() => cargoRef.current?.click()}><strong>Реестр грузов</strong><small>{cargoSource?.name ?? "Выбрать OPERATION_UNIT"}</small></button><button onClick={() => autoRef.current?.click()}><strong>ТТН / CMR</strong><small>{autoSource?.name ?? "Выбрать OPERATION_SUB_DOC"}</small></button><button onClick={() => pointsRef.current?.click()}><strong>Точки маршрута</strong><small>{pointsSource?.name ?? "Выбрать LIST_WAREHOUSE"}</small></button><button onClick={()=>contractsRef.current?.click()}><strong>Договоры</strong><small>Загрузить contracts.json</small></button><button className={styles.resetButton} onClick={resetSources}>Сбросить локальную базу</button></div><input ref={cargoRef} hidden type="file" accept=".xlsx,.xls" onChange={handleFile("cargo")}/><input ref={autoRef} hidden type="file" accept=".xlsx,.xls" onChange={handleFile("auto")}/><input ref={pointsRef} hidden type="file" accept=".xlsx,.xls" onChange={handleFile("points")}/><input ref={contractsRef} hidden type="file" accept=".json,application/json" onChange={handleContractsFile}/></details>
 
       {!ready && <section className={styles.startPanel}><div className={styles.startTitle}><small>ШАГ 1</small><h2>Обновите данные из TMS</h2><p>Нажмите кнопку выше. После получения грузов и ТТН/CMR автоматически откроется поиск перевозок.</p></div></section>}
 
       {ready && <>
         <section className={styles.search}><label><strong>Номера контейнеров</strong><textarea value={query} onChange={(event) => setQuery(event.target.value)} placeholder={'WEDU8636223\nTGBU5962912'}/></label><button onClick={search}>Найти перевозки →</button></section>
-        {results.length > 0 && <><section className={styles.bulkBar}><div><strong>Формирование документов</strong><small>{outputFolder ? "Папка: " + outputFolder : "Сначала выберите папку для XML"}</small></div><button className={styles.folderButton} onClick={chooseOutputFolder}>Выбрать папку</button><button className={styles.bulkButton} disabled={Boolean(generating)} onClick={generateAll}>{generating === "all" ? (bulkProgress || "Формируем…") : "Создать все документы"}</button></section><section className={styles.results}><div className={styles.tableWrap}><table><thead><tr><th>Контейнер</th><th>Клиент</th><th>Перевозчик</th><th>Маршрут</th><th>Адрес отправления</th><th>Склад клиента</th><th>Контейнерный сток</th><th>Водитель и ТС</th><th>Документы</th><th>Статус</th></tr></thead><tbody>{results.map((trip) => {
+        {results.length > 0 && <><section className={styles.bulkBar}><div><strong>Формирование документов</strong><small>{outputFolder ? "Папка: " + outputFolder : "Сначала выберите папку для XML"}</small></div><label className={styles.employeeField}><span>Сотрудник</span><input value={employee} onChange={event=>setEmployee(event.target.value)} placeholder="Фамилия Имя Отчество"/></label><button className={styles.folderButton} onClick={chooseOutputFolder}>Выбрать папку</button><button className={styles.bulkButton} disabled={Boolean(generating)} onClick={generateAll}>{generating === "all" ? (bulkProgress || "Формируем…") : "Создать все документы"}</button></section><section className={styles.results}><div className={styles.tableWrap}><table><thead><tr><th>Контейнер</th><th>Клиент</th><th>Перевозчик</th><th>Маршрут</th><th>Адрес отправления</th><th>Склад клиента</th><th>Контейнерный сток</th><th>Водитель и ТС</th><th>Документы</th><th>Статус</th></tr></thead><tbody>{results.map((trip) => {
           const cargo = trip._cargo; const auto = trip._auto;
           const warehouse = value(cargo,"Место доставки на склад","Место доставки груза (Маршрут заказа)","Адрес доставки","Место прибытия") || value(auto,"Место прибытия");
           const stock = value(cargo,"Контейнерный сток","Инструкция на сдачу порожнего","Перенаправление сдачи порожнего") || value(auto,"Контейнерный сток","Инструкция на сдачу порожнего","Перенаправление сдачи порожнего");

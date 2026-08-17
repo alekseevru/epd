@@ -14,3 +14,13 @@
 .rowPending{background:#eef1f2;color:#52666e}
 .rowWorking{background:#fff0cf;color:#8a5a12}
 .rowError{background:#f8dedb;color:#a53a34}
+
+/* Safe text wrapping and employee selector */
+.shell strong,.shell span,.shell small,.shell em,.shell td,.shell th,.shell button,.shell label{overflow-wrap:anywhere;word-break:normal}
+.sources article,.tmsSources article,.bulkBar>div,.docActions button>span,.statusList article>*{min-width:0}
+.tableWrap td{white-space:normal}
+.docActions button>span{overflow:hidden}
+.employeeField{width:min(280px,100%);display:flex;flex-direction:column;gap:4px}
+.employeeField span{color:#718087;font-size:10px;font-weight:800}
+.employeeField input{width:100%;min-width:0;padding:10px 11px;border:1px solid #295d7244;border-radius:9px;background:#fff;color:var(--deep);font:inherit}
+@media(max-width:900px){.employeeField{width:100%}}

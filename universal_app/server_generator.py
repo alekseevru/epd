@@ -27,14 +27,39 @@ class Generator(BaseGenerator):
             missing.append("заказчик")
         if not ctx["client_edo"]:
             missing.append("ID ЭДО заказчика")
-        if not ctx["driver_name"]:
-            missing.append("водитель")
+        if not ctx.get("user"):
+            missing.append("сотрудник, осуществляющий погрузку")
         if not ctx["truck_number"]:
             missing.append("автомобиль")
         if empty and not ctx["stock"]:
             missing.append("контейнерный сток")
         if missing:
             raise ValueError("не заполнено: " + ", ".join(missing))
+
+    @staticmethod
+    def warnings(ctx, empty=False, ezz=False):
+        warnings = []
+        if not ezz:
+            missing_driver = []
+            if not ctx.get("driver_name"):
+                missing_driver.append("ФИО")
+            if not ctx.get("driver_phone"):
+                missing_driver.append("телефон")
+            if len("".join(ch for ch in ctx.get("driver_license", "") if ch.isalnum())) < 7:
+                missing_driver.append("водительское удостоверение")
+            if missing_driver:
+                warnings.append("По водителю не заполнено: " + ", ".join(missing_driver) + ". Раздел водителя не будет включён в ЭТрН.")
+        if not ctx.get("contract"):
+            warnings.append("Для заказчика не найден договор в справочнике. Реквизиты договора не будут включены.")
+        if not ezz:
+            loading_found = ctx.get("delivery_point_found") if empty else ctx.get("loading_point_found")
+            if not loading_found:
+                warnings.append("Полный адрес погрузки не найден в справочнике точек маршрута.")
+            if not (ctx.get("delivery_owner") if empty else ctx.get("loading_owner")).get("inn"):
+                warnings.append("В справочнике точек маршрута не найден владелец объекта пункта погрузки.")
+            if not empty and not ctx.get("delivery_point_found"):
+                warnings.append("Полный адрес доставки не найден в справочнике точек маршрута.")
+        return warnings
 
     def etrn(self, ctx, empty=False):
         self._validate(ctx, empty=empty)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import re
 import uuid
 import xml.etree.ElementTree as ET
@@ -19,9 +20,9 @@ TAGLEX = {
 
 ADDRESS_PART_PATTERNS = {
     "Индекс": r"(?<!\d)(\d{6})(?!\d)",
-    "Дом": r"(?:^|[,;]\s*|\s)(?:д(?:ом)?\.?)\s*([\w/-]+)",
-    "Корпус": r"(?:^|[,;]\s*|\s)(?:корп(?:ус)?\.?|к\.?|стр(?:оение)?\.?)\s*([\w.\-/ ]+?)(?=\s*[,;]|$)",
-    "Кварт": r"(?:^|[,;]\s*|\s)(?:кв(?:артира)?\.?)\s*([\w\-/]+)",
+    "Дом": r"(?:^|[,;]\s*|\s)(?:д(?:ом)?\.?)(?!\w)\s*([\w/-]+)",
+    "Корпус": r"(?:^|[,;]\s*|\s)(?:корп(?:ус)?\.?|к\.?|стр(?:оение)?\.?)(?!\w)\s*([\w.\-/ ]+?)(?=\s*[,;]|$)",
+    "Кварт": r"(?:^|[,;]\s*|\s)(?:кв(?:артира)?\.?)(?!\w)\s*([\w\-/]+)",
 }
 
 
@@ -84,13 +85,42 @@ def _set_legal(node: ET.Element | None, data: dict):
     if address is not None:
         _set_address(address, data.get("address", ""))
     contact = node.find(".//Контакт")
+    phone_value = clean(data.get("phone"))
+    if not phone_value:
+        if contact is not None:
+            parent = next((item for item in node.iter() if contact in list(item)), None)
+            if parent is not None:
+                parent.remove(contact)
+        return
     if contact is None:
         requisites = node.find(".//РекИдентГО") or node.find(".//РекИдентЗак") or node.find(".//РекИдентГП")
         contact = ET.SubElement(requisites if requisites is not None else node, "Контакт")
     phone = contact.find("Тлф")
     if phone is None:
         phone = ET.SubElement(contact, "Тлф")
-    phone.text = data.get("phone") or "+70000000000"
+    phone.text = phone_value
+
+
+def _set_contract(node: ET.Element | None, contract: dict | None):
+    if node is None:
+        return
+    existing = node.find("ДогУслПер")
+    if not contract:
+        if existing is not None:
+            node.remove(existing)
+        return
+    if existing is None:
+        existing = ET.SubElement(node, "ДогУслПер")
+    existing.set("НаимДок", clean(contract.get("title")) or "Договор")
+    existing.set("НомерДок", clean(contract.get("number")))
+    raw_date = clean(contract.get("date"))
+    if raw_date:
+        try:
+            existing.set("ДатаДок", datetime.strptime(raw_date, "%Y-%m-%d").strftime("%d.%m.%Y"))
+        except ValueError:
+            existing.set("ДатаДок", raw_date)
+    else:
+        existing.attrib.pop("ДатаДок", None)
 
 
 def _as_datetime(value, fallback: datetime) -> datetime:
@@ -136,8 +166,10 @@ class Generator:
         self.catalogs = catalogs
         self.etrn_template = ET.fromstring((resources / "etrn_cargo_sample.xml").read_bytes().decode("windows-1251"))
         self.ezz_template = ET.fromstring((resources / "ezz_sample.xml").read_bytes().decode("windows-1251"))
-        contracts_file = resources / "contracts.json"
-        self.contracts = json.loads(contracts_file.read_text("utf-8")) if contracts_file.exists() else []
+        configured_contracts = clean(os.getenv("AGR_CONTRACTS_FILE"))
+        configured_file = Path(configured_contracts) if configured_contracts else None
+        contracts_file = configured_file if configured_file and configured_file.exists() else resources / "contracts.json"
+        self.contracts = json.loads(contracts_file.read_text("utf-8-sig")) if contracts_file.exists() else []
 
     def _contract_for(self, client_name: str) -> dict | None:
         key = normalize_name(client_name)
@@ -159,6 +191,29 @@ class Generator:
         driver = self.catalogs.driver(driver_name) or {}
         truck_number = clean(value(row, "Номер автомашины", "Транспортное средство"))
         truck = self.catalogs.vehicle(truck_number) or {}
+        route = clean(value(row, "Маршрут"))
+        route_names = [
+            clean(re.sub(r"^\(RU\)\s*", "", item, flags=re.IGNORECASE))
+            for item in re.split(r"\s*(?:->|→|—>)\s*", route)
+            if clean(item)
+        ]
+        loading_name = route_names[0] if route_names else clean(value(row, "Место отправления", "Последняя точка прибытия"))
+        delivery_name = route_names[-1] if len(route_names) > 1 else clean(value(row, "Место прибытия", "Последняя точка прибытия", "Места дислокации грузовых единиц"))
+        loading_point = self.catalogs.point(loading_name)
+        delivery_point = self.catalogs.point(delivery_name)
+
+        def point_address(point, fallback):
+            return clean((point or {}).get("Адрес на русском языке") or (point or {}).get("Адрес") or fallback)
+
+        def point_owner(point):
+            inn = clean((point or {}).get("ИНН"))
+            company = self.catalogs.company(inn=inn) if inn else None
+            result = party(company, clean((point or {}).get("Название")))
+            if point:
+                result["address"] = point_address(point, result.get("address"))
+                result["phone"] = clean(point.get("Номер телефона")) or result.get("phone", "")
+            return result
+
         return {
             "container": container,
             "date": trip_date,
@@ -178,8 +233,12 @@ class Generator:
             "trailer": clean(value(row, "Номер прицепа")),
             "weight": clean(value(row, "Вес брутто")) or "0",
             "seals": ", ".join(dict.fromkeys(filter(None, [clean(value(row, "Номер пломбы")), clean(value(row, "Номер пломбы 2"))]))),
-            "loading": clean(value(row, "Место отправления", "Последняя точка прибытия")),
-            "delivery": clean(value(row, "Место прибытия", "Последняя точка прибытия", "Места дислокации грузовых единиц")),
+            "loading": point_address(loading_point, loading_name),
+            "delivery": point_address(delivery_point, delivery_name),
+            "loading_owner": point_owner(loading_point),
+            "delivery_owner": point_owner(delivery_point),
+            "loading_point_found": bool(loading_point),
+            "delivery_point_found": bool(delivery_point),
             "delivery_datetime": _as_datetime(value(row, "Планируемая дата доставки на склад", "Плановая дата доставки на склад", "Плановая дата прибытия", "Последняя план дата прибытия", "ETA (план дата прибытия)"), datetime.combine(trip_date, time(9))),
             "empty_delivery_datetime": _as_datetime(value(row, "Дата сдачи порожнего"), _as_datetime(value(row, "Плановая дата прибытия", "Последняя план дата прибытия", "ETA (план дата прибытия)"), datetime.combine(trip_date, time(9)))),
             "planned_departure_datetime": _as_datetime(value(row, "Плановая дата отправления"), datetime.combine(trip_date, time(9))),
@@ -208,6 +267,7 @@ class Generator:
         info.set("ДатаЗак", ctx["date"].strftime("%d.%m.%Y"))
         _set_legal(info.find("СвГО"), TAGLEX)
         _set_legal(info.find("СвЗак"), ctx["client"])
+        _set_contract(info.find("СвЗак"), ctx.get("contract"))
         _set_legal(info.find("СвГП"), consignee)
         delivery = (
             clean((ctx["stock"] or {}).get("Адрес на русском языке") or (ctx["stock"] or {}).get("Адрес"))
@@ -224,16 +284,21 @@ class Generator:
                 instructions.attrib.pop("СвПломба", None)
         cargo = info.find("СвГруз/ОпГруз")
         cargo.set("НаимГруз", f"Порожний контейнер {ctx['container']}" if empty else f"Контейнер {ctx['container']}")
-        cargo.find("СвКонтейн/ИдКонтейн").text = ctx["container"]
+        container_info = cargo.find("СвКонтейн")
+        if container_info is not None:
+            cargo.remove(container_info)
         cargo.find("ПлМасГруз").set("МасБрутЗнач", "0" if empty else ctx["weight"])
         _set_legal(info.find("СвПер"), ctx["carrier"])
         driver = info.find("СвВодит")
         license_value = re.sub(r"\W", "", ctx["driver_license"])
-        driver.set("СерВУ", license_value[:-6] or "БН")
-        driver.set("НомВУ", license_value[-6:] or "БН")
-        driver.attrib.pop("ДатаВыдВУ", None)
-        driver.find("Тлф").text = ctx["driver_phone"] or "+70000000000"
-        driver.find("ФИО").attrib = _fio(ctx["driver_name"])
+        if driver is not None and ctx["driver_name"] and ctx["driver_phone"] and len(license_value) >= 7:
+            driver.set("СерВУ", license_value[:-6])
+            driver.set("НомВУ", license_value[-6:])
+            driver.attrib.pop("ДатаВыдВУ", None)
+            driver.find("Тлф").text = ctx["driver_phone"]
+            driver.find("ФИО").attrib = _fio(ctx["driver_name"])
+        elif driver is not None:
+            info.remove(driver)
         truck = info.find("СвТС/ТС")
         truck.set("РегНомер", ctx["truck_number"] or "НЕУКАЗАН")
         truck.find("ПарТС").set("Марка", ctx["truck_brand"])
@@ -248,11 +313,17 @@ class Generator:
         loading.set("МасБрутОтгр", "0" if empty else ctx["weight"])
         physical_loading = ctx["delivery"] if empty else ctx["loading"]
         _set_address(loading.find("ФАдресПогр"), physical_loading, "АдресРФ")
-        if empty:
-            owner = loading.find("ВладИнфр")
-            if owner is not None:
-                owner.set("СовпГОВ", "2")
-                _set_legal(owner, ctx["consignee"])
+        loading_person = loading.find("СвЛицПогрГр/РабЛицПогрГр")
+        if loading_person is not None:
+            loading_person.set("Должность", "Сотрудник")
+            loading_person.find("ФИО").attrib = _fio(ctx["user"])
+        owner = loading.find("ВладИнфр")
+        owner_data = ctx["delivery_owner"] if empty else ctx["loading_owner"]
+        if owner is not None and owner_data.get("inn"):
+            owner.set("СовпГОВ", "2")
+            _set_legal(owner, owner_data)
+        elif owner is not None:
+            loading.remove(owner)
         signer = doc.find("Подписант")
         signer.set("СтатПодп", "1")
         signer.set("Должн", "Сотрудник")

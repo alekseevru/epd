@@ -180,6 +180,25 @@ class Catalogs:
         return matches[0] if len(matches) == 1 else None
 
 
+    def point(self, name: str) -> dict | None:
+        key = normalize_name(name)
+        if not key:
+            return None
+        ranked = []
+        for row in self.points:
+            fields = (row.get("Номер склада и название"), row.get("Название"), row.get("Название (англ)"))
+            normalized = [normalize_name(item) for item in fields if clean(item)]
+            if key in normalized:
+                ranked.append((3, row))
+            elif any(key in item or item in key for item in normalized if len(item) >= 5):
+                ranked.append((2, row))
+        if not ranked:
+            return None
+        ranked.sort(key=lambda item: item[0], reverse=True)
+        best = [row for score, row in ranked if score == ranked[0][0]]
+        return best[0] if len(best) == 1 else None
+
+
 def trip_container(row: dict) -> str:
     for field in ("Номера грузовых единиц", "Контейнер", "Номер контейнера", "Импорт"):
         match = CONTAINER_RE.search(clean(row.get(field)).upper())
