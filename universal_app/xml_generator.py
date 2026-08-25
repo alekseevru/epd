@@ -85,6 +85,10 @@ def _set_legal(node: ET.Element | None, data: dict):
     if address is not None:
         _set_address(address, data.get("address", ""))
     contact = node.find(".//Контакт")
+    contact_tag = "Контакт"
+    if contact is None:
+        contact = node.find(".//Конт")
+        contact_tag = "Конт"
     phone_value = clean(data.get("phone"))
     if not phone_value:
         if contact is not None:
@@ -93,8 +97,14 @@ def _set_legal(node: ET.Element | None, data: dict):
                 parent.remove(contact)
         return
     if contact is None:
-        requisites = node.find(".//РекИдентГО") or node.find(".//РекИдентЗак") or node.find(".//РекИдентГП")
-        contact = ET.SubElement(requisites if requisites is not None else node, "Контакт")
+        requisites = node.find(".//РекИдентГО")
+        if requisites is None:
+            requisites = node.find(".//РекИдентЗак")
+        if requisites is None:
+            requisites = node.find(".//РекИдентГП")
+        if requisites is None and node.find("ИдСв") is not None:
+            contact_tag = "Конт"
+        contact = ET.SubElement(requisites if requisites is not None else node, contact_tag)
     phone = contact.find("Тлф")
     if phone is None:
         phone = ET.SubElement(contact, "Тлф")
@@ -171,9 +181,21 @@ class Generator:
         contracts_file = configured_file if configured_file and configured_file.exists() else resources / "contracts.json"
         self.contracts = json.loads(contracts_file.read_text("utf-8-sig")) if contracts_file.exists() else []
 
-    def _contract_for(self, client_name: str) -> dict | None:
-        key = normalize_name(client_name)
-        matches = [item for item in self.contracts if normalize_name(item.get("client")) == key and "нет номера договора" not in clean(item.get("number")).lower()]
+    def _contract_for(self, party_name: str, role: str = "client") -> dict | None:
+        key = normalize_name(party_name)
+
+        def contract_party(item):
+            if role == "carrier":
+                return item.get("carrier") or item.get("counterparty") or (
+                    item.get("client") if clean(item.get("role")).lower() == "carrier" else ""
+                )
+            return item.get("client") or item.get("counterparty")
+
+        matches = [
+            item for item in self.contracts
+            if normalize_name(contract_party(item)) == key
+            and "нет номера договора" not in clean(item.get("number")).lower()
+        ]
         if not matches:
             return None
         matches.sort(key=lambda item: (clean(item.get("last_invoice")), int(item.get("invoice_count") or 0), clean(item.get("date"))), reverse=True)
@@ -220,7 +242,9 @@ class Generator:
             "user": user,
             "client": party(client_company, client_name),
             "client_edo": self.catalogs.edo_id(client_company),
-            "contract": self._contract_for(client_name),
+            "order_number": f"{trip_date:%Y%m%d}-{container}",
+            "client_contract": self._contract_for(client_name),
+            "carrier_contract": self._contract_for(carrier_name, role="carrier"),
             "consignee": party(consignee_company, consignee_name),
             "consignee_edo": self.catalogs.edo_id(consignee_company),
             "carrier": party(carrier_company, carrier_name),
@@ -263,11 +287,11 @@ class Generator:
         info = doc.find("СодИнфГО")
         info.set("НомерТрН", f"{ctx['date']:%Y%m%d}-{ctx['container']}-{'EMPTY' if empty else 'CARGO'}")
         info.set("ДатаТрН", ctx["date"].strftime("%d.%m.%Y"))
-        info.set("НомЗак", f"{ctx['date']:%Y%m%d}-{ctx['container']}")
+        info.set("НомЗак", ctx["order_number"])
         info.set("ДатаЗак", ctx["date"].strftime("%d.%m.%Y"))
         _set_legal(info.find("СвГО"), TAGLEX)
         _set_legal(info.find("СвЗак"), ctx["client"])
-        _set_contract(info.find("СвЗак"), ctx.get("contract"))
+        _set_contract(info.find("СвЗак"), ctx.get("client_contract"))
         _set_legal(info.find("СвГП"), consignee)
         delivery = (
             clean((ctx["stock"] or {}).get("Адрес на русском языке") or (ctx["stock"] or {}).get("Адрес"))
@@ -345,7 +369,7 @@ class Generator:
         doc.set("ВрИнфГО", now.strftime("%H:%M:%S"))
         info = doc.find("СодИнфГО")
         contract = root.find(".//ДогОргПрвз")
-        selected_contract = ctx.get("contract")
+        selected_contract = ctx.get("carrier_contract")
         if contract is not None:
             if selected_contract:
                 contract.set("НомерДок", clean(selected_contract.get("number")))
@@ -357,7 +381,7 @@ class Generator:
             else:
                 contract.set("НомерДок", "Не найден в справочнике договоров")
                 contract.attrib.pop("ДатаДок", None)
-        info.set("НомЗак", f"{ctx['date']:%Y%m%d}-{ctx['container']}")
+        info.set("НомЗак", ctx["order_number"])
         info.set("ДатаЗак", ctx["date"].strftime("%d.%m.%Y"))
         _set_legal(info.find("СвГО"), TAGLEX)
         _set_legal(info.find("СвПрв"), ctx["carrier"])
