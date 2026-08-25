@@ -111,7 +111,7 @@ const server = http.createServer((request, response) => {
         const incoming=Buffer.concat(chunks);
         if(kind==="contracts"){
           const parsed=JSON.parse(incoming.toString("utf8").replace(/^\uFEFF/,""));
-          if(!Array.isArray(parsed)||parsed.some(item=>!item.client||!item.number)) throw new Error("Некорректный справочник договоров");
+          if(!Array.isArray(parsed)||parsed.some(item=>!(item.client||item.carrier||item.counterparty)||!item.number)) throw new Error("Некорректный справочник договоров");
         }
         const unchanged=fs.existsSync(target) && fs.readFileSync(target).equals(incoming);
         if(!unchanged) fs.writeFileSync(target,incoming);
