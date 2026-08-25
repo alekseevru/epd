@@ -243,6 +243,7 @@ class Generator:
             "client": party(client_company, client_name),
             "client_edo": self.catalogs.edo_id(client_company),
             "order_number": f"{trip_date:%Y%m%d}-{container}",
+            "order_date": trip_date.strftime("%d.%m.%Y"),
             "client_contract": self._contract_for(client_name),
             "carrier_contract": self._contract_for(carrier_name, role="carrier"),
             "consignee": party(consignee_company, consignee_name),
@@ -288,7 +289,7 @@ class Generator:
         info.set("НомерТрН", f"{ctx['date']:%Y%m%d}-{ctx['container']}-{'EMPTY' if empty else 'CARGO'}")
         info.set("ДатаТрН", ctx["date"].strftime("%d.%m.%Y"))
         info.set("НомЗак", ctx["order_number"])
-        info.set("ДатаЗак", ctx["date"].strftime("%d.%m.%Y"))
+        info.set("ДатаЗак", ctx["order_date"])
         _set_legal(info.find("СвГО"), TAGLEX)
         _set_legal(info.find("СвЗак"), ctx["client"])
         _set_contract(info.find("СвЗак"), ctx.get("client_contract"))
@@ -382,7 +383,7 @@ class Generator:
                 contract.set("НомерДок", "Не найден в справочнике договоров")
                 contract.attrib.pop("ДатаДок", None)
         info.set("НомЗак", ctx["order_number"])
-        info.set("ДатаЗак", ctx["date"].strftime("%d.%m.%Y"))
+        info.set("ДатаЗак", ctx["order_date"])
         _set_legal(info.find("СвГО"), TAGLEX)
         _set_legal(info.find("СвПрв"), ctx["carrier"])
         start = datetime.combine(ctx["date"], time(9))
