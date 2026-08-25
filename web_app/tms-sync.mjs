@@ -94,8 +94,18 @@ async function login(loginName, password) {
   return { cookie, token };
 }
 
-async function getRows(session, table, fields, filters) {
+function tmsDateTimestamp(value) {
+  const text = String(value || "").trim();
+  if (!text) return NaN;
+  const russian = /^(\d{1,2})[.](\d{1,2})[.](\d{4})/.exec(text);
+  if (russian) return Date.UTC(Number(russian[3]), Number(russian[2]) - 1, Number(russian[1]));
+  const timestamp = Date.parse(text);
+  return Number.isFinite(timestamp) ? timestamp : NaN;
+}
+
+async function getRows(session, table, fields, filters, createdSince = "") {
   const keys = Object.keys(fields);
+  const minimumCreatedAt = createdSince ? Date.parse(createdSince + "T00:00:00Z") : NaN;
   const all = [];
   const pageSize = 4000;
   const maxRows = ({OPERATION_UNIT:16000,OPERATION_SUB_DOC:24000,LIST_COMPANY:50000,LIST_AUTO:50000,LIST_DRIVERS:50000,LIST_WAREHOUSE:50000})[table] || 50000;
@@ -106,13 +116,32 @@ async function getRows(session, table, fields, filters) {
       method: "POST", body,
       headers: { Cookie: session.cookie, Autorization: session.token, "TableApi2-method": "get" },
     });
-    if (!response.ok) throw new Error(`TMS вернула ошибку ${response.status} для ${table}`);
+    if (!response.ok) {
+      if (offset === 0 && Object.hasOwn(fields, "CREATE_DATE")) {
+        const compatibleFields = { ...fields };
+        delete compatibleFields.CREATE_DATE;
+        return getRows(session, table, compatibleFields, filters, "");
+      }
+      throw new Error(`TMS вернула ошибку ${response.status} для ${table}`);
+    }
     const json = await response.json();
-    if (json?.result?.status !== "success" || !Array.isArray(json?.result?.rows)) throw new Error(`Не удалось прочитать ${table}`);
+    if (json?.result?.status !== "success" || !Array.isArray(json?.result?.rows)) {
+      // Some TMS installations do not expose CREATE_DATE in these registries.
+      // Retry without that optional field so an update is not blocked completely.
+      if (offset === 0 && Object.hasOwn(fields, "CREATE_DATE")) {
+        const compatibleFields = { ...fields };
+        delete compatibleFields.CREATE_DATE;
+        return getRows(session, table, compatibleFields, filters, "");
+      }
+      const details = json?.result?.message || json?.result?.error || json?.message || "";
+      throw new Error(`Не удалось прочитать ${table}${details ? `: ${details}` : ""}`);
+    }
     for (const values of json.result.rows) {
       const row = {};
       keys.forEach((key, index) => { row[fields[key]] = values[index] ?? ""; });
       if (table === "OPERATION_SUB_DOC" && String(row["Тип операции"]) !== "1") continue;
+      const createdAt = tmsDateTimestamp(row["Дата создания строки"]);
+      if (Number.isFinite(minimumCreatedAt) && Number.isFinite(createdAt) && createdAt < minimumCreatedAt) continue;
       const route = String(row["Маршрут"] || "");
       const points = route.split(/\s*(?:->|→|—>)\s*/);
       row["Место отправления"] = points[0] || "";
@@ -139,21 +168,22 @@ export async function syncTms({ login: loginName, password, cacheDir, referenceD
   const fourMonthsAgo = new Date();
   fourMonthsAgo.setMonth(fourMonthsAgo.getMonth() - 4);
   const createdSince = fourMonthsAgo.toISOString().slice(0, 10);
-  const cargoFilter = { tryNewFilterFormat: true, value: [["CREATE_DATE", ">=", createdSince]] };
-  const autoFilter = { tryNewFilterFormat: true, value: [["ID_OPERATION_TYPE", "=", 1], ["CREATE_DATE", ">=", createdSince]] };
+  // CREATE_DATE is not accepted as a server-side filter by every TMS table.
+  // Keep the API request compatible and apply the four-month limit locally.
+  const autoFilter = { tryNewFilterFormat: true, value: [["ID_OPERATION_TYPE", "=", 1]] };
   const tasks = [
-    ["cargo","OPERATION_UNIT",cargoFields,cargoFilter,cacheDir,"cargo.xlsx"],
-    ["auto","OPERATION_SUB_DOC",autoFields,autoFilter,cacheDir,"auto.xlsx"],
-    ["companies","LIST_COMPANY",companyFields,null,referenceDir,"companies.xlsx"],
-    ["vehicles","LIST_AUTO",vehicleFields,null,referenceDir,"vehicles.xlsx"],
-    ["drivers","LIST_DRIVERS",driverFields,null,referenceDir,"drivers.xlsx"],
-    ["points","LIST_WAREHOUSE",warehouseFields,null,referenceDir,"route-points.xlsx"],
+    ["cargo","OPERATION_UNIT",cargoFields,null,cacheDir,"cargo.xlsx",createdSince],
+    ["auto","OPERATION_SUB_DOC",autoFields,autoFilter,cacheDir,"auto.xlsx",createdSince],
+    ["companies","LIST_COMPANY",companyFields,null,referenceDir,"companies.xlsx",""],
+    ["vehicles","LIST_AUTO",vehicleFields,null,referenceDir,"vehicles.xlsx",""],
+    ["drivers","LIST_DRIVERS",driverFields,null,referenceDir,"drivers.xlsx",""],
+    ["points","LIST_WAREHOUSE",warehouseFields,null,referenceDir,"route-points.xlsx",""],
   ];
   const counts = {};
-  for (const [key,table,fields,filter,targetDir,filename] of tasks) {
+  for (const [key,table,fields,filter,targetDir,filename,minimumDate] of tasks) {
     onStatus(key,"working","Получаем данные…");
     try {
-      const rows=await getRows(session,table,fields,filter);
+      const rows=await getRows(session,table,fields,filter,minimumDate);
       if(!rows.length) throw new Error("реестр пуст");
       writeWorkbook(path.join(targetDir,filename),table,rows);
       counts[key]=rows.length; onStatus(key,"saved",rows.length.toLocaleString("ru-RU")+" строк");
