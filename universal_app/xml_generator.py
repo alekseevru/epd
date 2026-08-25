@@ -111,6 +111,21 @@ def _set_legal(node: ET.Element | None, data: dict):
     phone.text = phone_value
 
 
+def _set_ezz_shipper_phone(node: ET.Element | None, phone_value: str):
+    """Write the EZZ shipper phone to the exact schema node used by Kontur."""
+    if node is None:
+        return
+    for legacy in node.findall("Контакт"):
+        node.remove(legacy)
+    contact = node.find("Конт")
+    if contact is None:
+        contact = ET.SubElement(node, "Конт")
+    phone = contact.find("Тлф")
+    if phone is None:
+        phone = ET.SubElement(contact, "Тлф")
+    phone.text = clean(phone_value)
+
+
 def _set_contract(node: ET.Element | None, contract: dict | None):
     if node is None:
         return
@@ -176,24 +191,29 @@ class Generator:
         self.catalogs = catalogs
         self.etrn_template = ET.fromstring((resources / "etrn_cargo_sample.xml").read_bytes().decode("windows-1251"))
         self.ezz_template = ET.fromstring((resources / "ezz_sample.xml").read_bytes().decode("windows-1251"))
+        embedded_file = resources / "contracts.json"
+        self.contracts = json.loads(embedded_file.read_text("utf-8-sig")) if embedded_file.exists() else []
         configured_contracts = clean(os.getenv("AGR_CONTRACTS_FILE"))
         configured_file = Path(configured_contracts) if configured_contracts else None
-        contracts_file = configured_file if configured_file and configured_file.exists() else resources / "contracts.json"
-        self.contracts = json.loads(contracts_file.read_text("utf-8-sig")) if contracts_file.exists() else []
+        if configured_file and configured_file.exists() and configured_file.resolve() != embedded_file.resolve():
+            self.contracts.extend(json.loads(configured_file.read_text("utf-8-sig")))
 
     def _contract_for(self, party_name: str, role: str = "client") -> dict | None:
         key = normalize_name(party_name)
 
-        def contract_party(item):
+        def contract_parties(item):
+            aliases = item.get("aliases") if isinstance(item.get("aliases"), list) else []
             if role == "carrier":
-                return item.get("carrier") or item.get("counterparty") or (
+                primary = item.get("carrier") or item.get("counterparty") or (
                     item.get("client") if clean(item.get("role")).lower() == "carrier" else ""
                 )
-            return item.get("client") or item.get("counterparty")
+            else:
+                primary = item.get("client") or item.get("counterparty")
+            return [primary, *aliases]
 
         matches = [
             item for item in self.contracts
-            if normalize_name(contract_party(item)) == key
+            if any(normalize_name(name) == key for name in contract_parties(item) if clean(name))
             and "нет номера договора" not in clean(item.get("number")).lower()
         ]
         if not matches:
@@ -384,7 +404,9 @@ class Generator:
                 contract.attrib.pop("ДатаДок", None)
         info.set("НомЗак", ctx["order_number"])
         info.set("ДатаЗак", ctx["order_date"])
-        _set_legal(info.find("СвГО"), TAGLEX)
+        shipper = info.find("СвГО")
+        _set_legal(shipper, TAGLEX)
+        _set_ezz_shipper_phone(shipper, TAGLEX["phone"])
         _set_legal(info.find("СвПрв"), ctx["carrier"])
         start = datetime.combine(ctx["date"], time(9))
         point = info.find("ПунктПод")

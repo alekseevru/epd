@@ -180,7 +180,7 @@ export async function syncTms({ login: loginName, password, cacheDir, referenceD
     ["points","LIST_WAREHOUSE",warehouseFields,null,referenceDir,"route-points.xlsx",""],
   ];
   const counts = {};
-  for (const [key,table,fields,filter,targetDir,filename,minimumDate] of tasks) {
+  const runTask = async ([key,table,fields,filter,targetDir,filename,minimumDate]) => {
     onStatus(key,"working","Получаем данные…");
     try {
       const rows=await getRows(session,table,fields,filter,minimumDate);
@@ -188,6 +188,10 @@ export async function syncTms({ login: loginName, password, cacheDir, referenceD
       writeWorkbook(path.join(targetDir,filename),table,rows);
       counts[key]=rows.length; onStatus(key,"saved",rows.length.toLocaleString("ru-RU")+" строк");
     } catch(error) { onStatus(key,"error",error.message||"Ошибка"); throw error; }
-  }
+  };
+  // Transport registries and reference catalogs are independent, so download
+  // them concurrently in two controlled groups instead of six serial passes.
+  await Promise.all(tasks.slice(0,2).map(runTask));
+  await Promise.all(tasks.slice(2).map(runTask));
   return { ...counts, updatedAt: new Date().toISOString() };
 }
