@@ -116,7 +116,14 @@ async function getRows(session, table, fields, filters, createdSince = "") {
       method: "POST", body,
       headers: { Cookie: session.cookie, Autorization: session.token, "TableApi2-method": "get" },
     });
-    if (!response.ok) throw new Error(`TMS вернула ошибку ${response.status} для ${table}`);
+    if (!response.ok) {
+      if (offset === 0 && Object.hasOwn(fields, "CREATE_DATE")) {
+        const compatibleFields = { ...fields };
+        delete compatibleFields.CREATE_DATE;
+        return getRows(session, table, compatibleFields, filters, "");
+      }
+      throw new Error(`TMS вернула ошибку ${response.status} для ${table}`);
+    }
     const json = await response.json();
     if (json?.result?.status !== "success" || !Array.isArray(json?.result?.rows)) {
       // Some TMS installations do not expose CREATE_DATE in these registries.
