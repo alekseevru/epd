@@ -51,10 +51,26 @@ def refresh_sources():
                 match = re.search(r"[A-ZА-Я]{4}\d{7}", text.upper())
                 if match: cargo_index[match.group()] = row; break
     auto_index = {}
+    supplemental_fields = (
+        "Водитель", "ФИО водителя", "Телефон водителя",
+        "Номер автомашины", "Транспортное средство", "Номер прицепа",
+    )
     for row in read_xlsx(auto_file, "OPERATION_SUB_DOC"):
         import re
         match = re.search(r"[A-ZА-Я]{4}\d{7}", clean(row.get("Номера грузовых единиц")).upper())
-        if match: auto_index[match.group()] = row
+        if not match:
+            continue
+        container = match.group()
+        if container not in auto_index:
+            # TMS exports rows by ID descending: keep the newest operation.
+            auto_index[container] = dict(row)
+            continue
+        # Preserve the newest route and dates, but fill missing driver/vehicle
+        # data from other operations of the same container.
+        selected = auto_index[container]
+        for field in supplemental_fields:
+            if not clean(selected.get(field)) and clean(row.get(field)):
+                selected[field] = row[field]
     source_stamp = stamp
 
 
