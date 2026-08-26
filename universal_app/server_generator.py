@@ -48,7 +48,9 @@ class Generator(BaseGenerator):
             if len("".join(ch for ch in ctx.get("driver_license", "") if ch.isalnum())) < 7:
                 missing_driver.append("водительское удостоверение")
             if missing_driver:
-                warnings.append("По водителю не заполнено: " + ", ".join(missing_driver) + ". Раздел водителя не будет включён в ЭТрН.")
+                has_driver_data = bool(ctx.get("driver_name") or ctx.get("driver_phone") or ctx.get("driver_license"))
+                ending = " Остальные сведения о водителе будут заполнены." if has_driver_data else " Раздел водителя не будет включён в ЭТрН."
+                warnings.append("По водителю не заполнено: " + ", ".join(missing_driver) + "." + ending)
         if ezz and not ctx.get("carrier_contract"):
             warnings.append("Для перевозчика не найден договор в справочнике. В заявке будет указано, что договор не найден.")
         elif not ezz and not ctx.get("client_contract"):
