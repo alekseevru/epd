@@ -336,12 +336,29 @@ class Generator:
         _set_legal(info.find("СвПер"), ctx["carrier"])
         driver = info.find("СвВодит")
         license_value = re.sub(r"\W", "", ctx["driver_license"])
-        if driver is not None and ctx["driver_name"] and ctx["driver_phone"] and len(license_value) >= 7:
-            driver.set("СерВУ", license_value[:-6])
-            driver.set("НомВУ", license_value[-6:])
+        has_driver_data = bool(ctx["driver_name"] or ctx["driver_phone"] or license_value)
+        if driver is not None and has_driver_data:
+            if len(license_value) >= 7:
+                driver.set("СерВУ", license_value[:-6])
+                driver.set("НомВУ", license_value[-6:])
+            else:
+                driver.attrib.pop("СерВУ", None)
+                driver.attrib.pop("НомВУ", None)
             driver.attrib.pop("ДатаВыдВУ", None)
-            driver.find("Тлф").text = ctx["driver_phone"]
-            driver.find("ФИО").attrib = _fio(ctx["driver_name"])
+            phone = driver.find("Тлф")
+            if ctx["driver_phone"]:
+                if phone is None:
+                    phone = ET.SubElement(driver, "Тлф")
+                phone.text = ctx["driver_phone"]
+            elif phone is not None:
+                driver.remove(phone)
+            driver_name = driver.find("ФИО")
+            if ctx["driver_name"]:
+                if driver_name is None:
+                    driver_name = ET.SubElement(driver, "ФИО")
+                driver_name.attrib = _fio(ctx["driver_name"])
+            elif driver_name is not None:
+                driver.remove(driver_name)
         elif driver is not None:
             info.remove(driver)
         truck = info.find("СвТС/ТС")
