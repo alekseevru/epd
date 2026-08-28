@@ -6,7 +6,7 @@ import os
 import re
 import uuid
 import xml.etree.ElementTree as ET
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
 from data_sources import Catalogs, clean, normalize_name, value
@@ -156,8 +156,14 @@ def _as_datetime(value, fallback: datetime) -> datetime:
     text = clean(value)
     if not text:
         return fallback
+    def parse_iso():
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(timezone(timedelta(hours=3))).replace(tzinfo=None)
+        return parsed
+
     for parser in (
-        lambda: datetime.fromisoformat(text.replace("Z", "+00:00")).replace(tzinfo=None),
+        parse_iso,
         lambda: datetime.strptime(text, "%d.%m.%Y %H:%M"),
         lambda: datetime.strptime(text, "%d.%m.%Y"),
     ):
@@ -285,9 +291,10 @@ class Generator:
             "loading_point_found": bool(loading_point),
             "delivery_point_found": bool(delivery_point),
             "delivery_datetime": _as_datetime(value(row, "Планируемая дата доставки на склад", "Плановая дата доставки на склад", "Плановая дата прибытия", "Последняя план дата прибытия", "ETA (план дата прибытия)"), datetime.combine(trip_date, time(9))),
+            "planned_arrival_datetime": _as_datetime(value(row, "Плановая дата прибытия", "Последняя план дата прибытия", "ETA (план дата прибытия)"), _as_datetime(value(row, "Планируемая дата доставки на склад", "Плановая дата доставки на склад"), datetime.combine(trip_date, time(17)))),
             "empty_delivery_datetime": _as_datetime(value(row, "Дата сдачи порожнего"), _as_datetime(value(row, "Плановая дата прибытия", "Последняя план дата прибытия", "ETA (план дата прибытия)"), datetime.combine(trip_date, time(9)))),
             "planned_departure_datetime": _as_datetime(value(row, "Плановая дата отправления"), datetime.combine(trip_date, time(9))),
-            "actual_departure_datetime": _as_datetime(value(row, "Плановая дата отправления"), datetime.combine(trip_date, time(9))),
+            "actual_departure_datetime": _as_datetime(value(row, "Фактическая дата отправления"), _as_datetime(value(row, "Плановая дата отправления"), datetime.combine(trip_date, time(9)))),
             "stock": stock,
         }
 
@@ -425,13 +432,14 @@ class Generator:
         _set_legal(shipper, TAGLEX)
         _set_ezz_shipper_phone(shipper, TAGLEX["phone"])
         _set_legal(info.find("СвПрв"), ctx["carrier"])
-        start = datetime.combine(ctx["date"], time(9))
+        start = ctx["planned_departure_datetime"]
+        finish = ctx["planned_arrival_datetime"]
         point = info.find("ПунктПод")
         point.set("ДатВрПод", _epd_datetime(start))
         _set_address(point.find("АдрПунктПод/Адрес"), ctx["loading"])
         route_points = info.findall("АдрПункт")
         route_points[0].set("ДатВрОпер", _epd_datetime(start))
-        route_points[1].set("ДатВрОпер", _epd_datetime(start + timedelta(hours=8)))
+        route_points[1].set("ДатВрОпер", _epd_datetime(finish))
         _set_address(route_points[0].find("АдресПункт/Адрес"), ctx["loading"])
         _set_address(route_points[1].find("АдресПункт/Адрес"), ctx["delivery"])
         cargo = info.find("ОпГруз")
