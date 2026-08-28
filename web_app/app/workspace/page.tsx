@@ -300,7 +300,7 @@ export default function Workspace() {
 
       currentStep="draft"; updateStep("draft","working","Передаём XML и ожидаем проверку документа в Диадоке");
       setKonturTransfer(current=>({...current,summary:"Создаём черновик в Контур.Логистике"}));
-      const response=await fetchWithTimeout("/api/kontur/draft",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({kind,content:document.content,filename:document.filename})},100_000);
+      const response=await fetchWithTimeout("/api/kontur/draft",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({kind,content:document.content,filename:document.filename})},140_000);
       const result=await response.json();
       if(!response.ok||result.error) throw new Error(result.error||"Не удалось создать черновик");
       updateStep("draft","saved",result.messageId?`Черновик создан, MessageId: ${result.messageId}`:"Черновик успешно создан");

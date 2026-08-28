@@ -179,13 +179,29 @@ const server = http.createServer((request, response) => {
         if(!["cargo","empty","order"].includes(payload.kind)) throw new Error("Неизвестный вид документа");
         if(!payload.content||typeof payload.content!=="string") throw new Error("XML документа не передан");
         const accessToken=await getKonturAccessToken(); const format=konturDocumentFormat(payload.kind);
-        const apiResponse=await fetch(`${diadocApiUrl}/V3/PostMessage`,{
-          method:"POST",headers:{Authorization:`Bearer ${accessToken}`,"Content-Type":"application/json; charset=utf-8","Accept":"application/json"},
-          body:JSON.stringify({FromBoxId:config.boxId,IsDraft:true,StrictDraftValidation:true,DocumentAttachments:[{SignedContent:{Content:payload.content},...format}]}),
-          signal:AbortSignal.timeout(90_000)
-        });
-        const text=await apiResponse.text(); let result; try{result=JSON.parse(text);}catch{result={message:text};}
-        if(!apiResponse.ok) throw new Error(result.message||result.error_description||result.error||`Диадок вернул HTTP ${apiResponse.status}`);
+        const operationId=crypto.randomUUID();
+        const requestBody=JSON.stringify({FromBoxId:config.boxId,IsDraft:true,StrictDraftValidation:false,DocumentAttachments:[{SignedContent:{Content:payload.content},...format}]});
+        const deadline=Date.now()+90_000; let apiResponse; let result={};
+        while(Date.now()<deadline){
+          try {
+            apiResponse=await fetch(`${diadocApiUrl}/V3/PostMessage?operationId=${operationId}`,{
+              method:"POST",headers:{Authorization:`Bearer ${accessToken}`,"Content-Type":"application/json; charset=utf-8","Accept":"application/json"},
+              body:requestBody,signal:AbortSignal.timeout(Math.min(30_000,Math.max(1_000,deadline-Date.now())))
+            });
+          } catch(error) {
+            if(error?.name!=="TimeoutError"||Date.now()>=deadline) throw error;
+            continue;
+          }
+          if(apiResponse.status===204){
+            const retryAfter=Math.max(1,Number.parseInt(apiResponse.headers.get("retry-after")||"2",10)||2);
+            await new Promise(resolve=>setTimeout(resolve,Math.min(retryAfter*1_000,Math.max(0,deadline-Date.now()))));
+            continue;
+          }
+          const text=await apiResponse.text(); try{result=JSON.parse(text);}catch{result={message:text};}
+          if(!apiResponse.ok) throw new Error(result.message||result.error_description||result.error||`Диадок вернул HTTP ${apiResponse.status}`);
+          break;
+        }
+        if(!apiResponse||apiResponse.status===204) throw new Error("Диадок продолжает обрабатывать черновик дольше 90 секунд. Повторите проверку позднее.");
         const document=result.Entities?.find(item=>item.EntityType==="Attachment")||result.Entities?.[0];
         response.writeHead(200,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({ok:true,messageId:result.MessageId||null,entityId:document?.EntityId||null}));
       }catch(error){const message=error?.name==="TimeoutError"?"Контур не ответил за 90 секунд. Повторите попытку или проверьте доступность API":error.message||"Не удалось создать черновик в Контуре";response.writeHead(400,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({error:message}));}
