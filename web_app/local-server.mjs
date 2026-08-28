@@ -8,6 +8,8 @@ import { randomBytes } from "node:crypto";
 import { syncTms } from "./tms-sync.mjs";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
+const localEnvFile = path.join(root,"..",".env");
+if (fs.existsSync(localEnvFile) && typeof process.loadEnvFile === "function") process.loadEnvFile(localEnvFile);
 const clientRoot = path.join(root, "dist", "client");
 const vinextCli = path.join(root, "node_modules", "vinext", "dist", "cli.js");
 const appPort = 3001;
