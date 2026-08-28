@@ -48,6 +48,7 @@ async function exchangeKonturToken(parameters) {
     method:"POST",
     headers:{"Content-Type":"application/x-www-form-urlencoded","Accept":"application/json"},
     body:new URLSearchParams({...parameters,client_id:config.clientId,client_secret:config.clientSecret}),
+    signal:AbortSignal.timeout(30_000),
   });
   const text=await response.text();
   let result; try { result=JSON.parse(text); } catch { result={error_description:text}; }
@@ -66,7 +67,7 @@ async function getKonturAccessToken() {
 }
 async function verifyKonturBox(accessToken) {
   const config=konturConfig();
-  const response=await fetch(`${diadocApiUrl}/GetMyOrganizations`,{headers:{Authorization:`Bearer ${accessToken}`,"Accept":"application/json"}});
+  const response=await fetch(`${diadocApiUrl}/GetMyOrganizations`,{headers:{Authorization:`Bearer ${accessToken}`,"Accept":"application/json"},signal:AbortSignal.timeout(30_000)});
   const text=await response.text(); let result; try{result=JSON.parse(text);}catch{result={};}
   if(!response.ok) throw new Error(result.message||`Не удалось проверить ящик Контур: HTTP ${response.status}`);
   const boxes=(result.Organizations||[]).flatMap(organization=>organization.Boxes||[]);
@@ -180,13 +181,14 @@ const server = http.createServer((request, response) => {
         const accessToken=await getKonturAccessToken(); const format=konturDocumentFormat(payload.kind);
         const apiResponse=await fetch(`${diadocApiUrl}/V3/PostMessage`,{
           method:"POST",headers:{Authorization:`Bearer ${accessToken}`,"Content-Type":"application/json; charset=utf-8","Accept":"application/json"},
-          body:JSON.stringify({FromBoxId:config.boxId,IsDraft:true,StrictDraftValidation:true,DocumentAttachments:[{SignedContent:{Content:payload.content},...format}]})
+          body:JSON.stringify({FromBoxId:config.boxId,IsDraft:true,StrictDraftValidation:true,DocumentAttachments:[{SignedContent:{Content:payload.content},...format}]}),
+          signal:AbortSignal.timeout(90_000)
         });
         const text=await apiResponse.text(); let result; try{result=JSON.parse(text);}catch{result={message:text};}
         if(!apiResponse.ok) throw new Error(result.message||result.error_description||result.error||`Диадок вернул HTTP ${apiResponse.status}`);
         const document=result.Entities?.find(item=>item.EntityType==="Attachment")||result.Entities?.[0];
         response.writeHead(200,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({ok:true,messageId:result.MessageId||null,entityId:document?.EntityId||null}));
-      }catch(error){response.writeHead(400,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({error:error.message||"Не удалось создать черновик в Контуре"}));}
+      }catch(error){const message=error?.name==="TimeoutError"?"Контур не ответил за 90 секунд. Повторите попытку или проверьте доступность API":error.message||"Не удалось создать черновик в Контуре";response.writeHead(400,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({error:message}));}
     })); return;
   }
   if (request.method === "GET" && url.pathname === "/api/tms-status") {
