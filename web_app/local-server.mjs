@@ -214,9 +214,12 @@ const server = http.createServer((request, response) => {
     })(); return;
   }
   if (request.method === "POST" && url.pathname === "/api/kontur/draft") {
-    let body=""; request.setEncoding("utf8"); request.on("data",chunk=>{body+=chunk;if(body.length>15_000_000)request.destroy();}); request.on("end",()=>void(async()=>{
+    const chunks=[]; let received=0;
+    request.on("data",chunk=>{received+=chunk.length;if(received>15_000_000){response.writeHead(413,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({error:"XML превышает допустимый размер"}));request.destroy();return;}chunks.push(chunk);});
+    request.on("end",()=>{
       try {
-        const payload=JSON.parse(body);
+        if(response.writableEnded)return;
+        const payload=JSON.parse(Buffer.concat(chunks).toString("utf8"));
         if(!["cargo","empty","order"].includes(payload.kind)) throw new Error("Неизвестный вид документа");
         if(!payload.content||typeof payload.content!=="string") throw new Error("XML документа не передан");
         const jobId=randomBytes(16).toString("hex");
@@ -224,7 +227,7 @@ const server = http.createServer((request, response) => {
         void createKonturDraft(jobId,payload);
         response.writeHead(202,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify({ok:true,jobId}));
       }catch(error){response.writeHead(400,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({error:error.message||"Не удалось запустить создание черновика"}));}
-    })); return;
+    }); return;
   }
   if(request.method==="GET"&&url.pathname==="/api/kontur/draft-status"){
     const jobId=url.searchParams.get("jobId")||""; const job=konturDraftJobs.get(jobId);
