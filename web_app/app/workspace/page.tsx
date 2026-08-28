@@ -78,6 +78,8 @@ export default function Workspace() {
   const [bulkProgress, setBulkProgress] = useState("");
   const [statusModalOpen, setStatusModalOpen] = useState(false);
   const [docStatuses, setDocStatuses] = useState<Record<string,{state:"queued"|"working"|"saved"|"error";text:string}>>({});
+  const [kontur, setKontur] = useState({configured:false,connected:false,boxId:""});
+  const [konturStatuses, setKonturStatuses] = useState<Record<string,{state:"working"|"saved"|"error";text:string}>>({});
   const restoredRef = useRef(false);
 
   useEffect(() => {
@@ -107,6 +109,18 @@ export default function Workspace() {
         if(cargo&&auto) setMessage("Реестры восстановлены из этого браузера. Можно продолжать поиск.");
       } catch { setMessage("Сохранённых реестров пока нет. Обновите данные из TMS."); }
     })();
+  }, []);
+
+  useEffect(() => {
+    void fetch("/api/kontur/status",{cache:"no-store"}).then(async(response)=>{
+      if(!response.ok) throw new Error("Статус Контур недоступен");
+      const status=await response.json() as {configured:boolean;connected:boolean;boxId?:string};
+      setKontur({configured:status.configured,connected:status.connected,boxId:status.boxId||""});
+      const parameters=new URLSearchParams(window.location.search);
+      if(parameters.get("kontur")==="connected") setMessage("Контур подключён. Можно создавать черновики.");
+      if(parameters.get("kontur")==="error") setMessage("Не удалось подключить Контур: "+(parameters.get("message")||"ошибка авторизации"));
+      if(parameters.has("kontur")) window.history.replaceState({},document.title,window.location.pathname);
+    }).catch(()=>setKontur({configured:false,connected:false,boxId:""}));
   }, []);
 
   const resetSources=async()=>{await clearSourceFiles();setCargoRows([]);setAutoRows([]);setPoints([]);setCargoSource(null);setAutoSource(null);setPointsSource(null);setResults([]);setQuery("");setMessage("Сохранённые реестры удалены. Подключите актуальные файлы.");};
@@ -210,12 +224,8 @@ export default function Workspace() {
     try { const handle = await picker(); outputRef.current = handle; setOutputFolder(handle.name); setMessage("Папка выбрана: " + handle.name); } catch { /* окно закрыто */ }
   };
 
-  const generateDocument = async (trip: Trip, kind: "cargo" | "empty" | "order", quiet = false) => {
-    const key = trip._container + kind;
-    setDocStatuses((current)=>({...current,[key]:{state:"working",text:"Формируется…"}}));
-    if (!quiet) { setGenerating(key); setMessage("Формируем документ для " + trip._container + "…"); }
-    try {
-      const row = { ...(trip._cargo ?? {}), ...(trip._auto ?? {}) };
+  const prepareDocument = async (trip: Trip, kind: "cargo" | "empty" | "order") => {
+    const row = { ...(trip._cargo ?? {}), ...(trip._auto ?? {}) };
       const requestDocument = async (confirmWarnings = false) => {
         const response = await fetch("/api/generate", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({kind,container:trip._container,row,date:new Date().toISOString().slice(0,10),user:employee.trim(),confirmWarnings}) });
         return {response,result:await response.json()};
@@ -229,6 +239,15 @@ export default function Workspace() {
         ({response,result} = await requestDocument(true));
       }
       if (!response.ok || result.error) throw new Error(result.error || "Не удалось сформировать документ");
+      return result as {content:string;filename:string};
+  };
+
+  const generateDocument = async (trip: Trip, kind: "cargo" | "empty" | "order", quiet = false) => {
+    const key = trip._container + kind;
+    setDocStatuses((current)=>({...current,[key]:{state:"working",text:"Формируется…"}}));
+    if (!quiet) { setGenerating(key); setMessage("Формируем документ для " + trip._container + "…"); }
+    try {
+      const result=await prepareDocument(trip,kind);
       const bytes = Uint8Array.from(atob(result.content), (char) => char.charCodeAt(0));
       const blob = new Blob([bytes], {type:"application/xml"});
       if (outputRef.current) {
@@ -243,6 +262,21 @@ export default function Workspace() {
       return true;
     } catch (error) { const errorText=error instanceof Error ? error.message : "Ошибка формирования документа"; setDocStatuses((current)=>({...current,[key]:{state:"error",text:errorText}})); if (!quiet) setMessage(errorText); return false; }
     finally { if (!quiet) setGenerating(""); }
+  };
+
+  const sendToKontur = async (trip:Trip,kind:"cargo"|"empty"|"order") => {
+    const key=trip._container+kind; setKonturStatuses(current=>({...current,[key]:{state:"working",text:"Передаём…"}}));
+    try {
+      const document=await prepareDocument(trip,kind);
+      const response=await fetch("/api/kontur/draft",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({kind,content:document.content,filename:document.filename})});
+      const result=await response.json();
+      if(!response.ok||result.error) throw new Error(result.error||"Не удалось создать черновик");
+      setKonturStatuses(current=>({...current,[key]:{state:"saved",text:"Черновик создан"}}));
+      setMessage(`Черновик ${document.filename} создан в Контур.Логистике`);
+    } catch(error) {
+      const text=error instanceof Error?error.message:"Ошибка передачи в Контур";
+      setKonturStatuses(current=>({...current,[key]:{state:"error",text}})); setMessage(text);
+    }
   };
 
   const generateAll = async () => {
@@ -279,6 +313,10 @@ export default function Workspace() {
     <header className={styles.topbar}><div className={styles.logo}>А</div><div><strong>Создание ЭПД</strong><span>локальная версия</span></div><i/><b>{ready ? "База подключена" : "Нужны 2 файла"}</b></header>
     <section className={styles.content}>
       <div className={styles.notice}>{busy ? "Читаем файл…" : message}</div>
+      <section className={styles.konturPanel}>
+        <div><b>{kontur.connected?"✓":"К"}</b><span><strong>Контур.Логистика</strong><small>{kontur.connected?"Подключено — черновики доступны":kontur.configured?"Требуется вход сотрудника":"Интеграция не настроена на сервере"}</small></span></div>
+        {!kontur.connected&&<button disabled={!kontur.configured} onClick={()=>{window.location.href="/api/kontur/login";}}>{kontur.configured?"Войти через Контур":"Нет настроек API"}</button>}
+      </section>
       <section className={styles.tmsPanel}>
         <div className={styles.tmsBar}><div><strong>Сохранённые данные TMS</strong><small>После обновления доступны всем сотрудникам и автоматически открываются при следующем входе.</small></div><button disabled={tmsBusy || busy} onClick={updateFromTms}>{tmsBusy ? "Обновляем…" : ready ? "Обновить данные" : "Загрузить данные из TMS"}</button></div>
         <div className={styles.tmsSources}>
@@ -299,7 +337,8 @@ export default function Workspace() {
           const warehouse = value(cargo,"Место доставки на склад","Место доставки груза (Маршрут заказа)","Адрес доставки","Место прибытия") || value(auto,"Место прибытия");
           const stock = value(cargo,"Контейнерный сток","Инструкция на сдачу порожнего","Перенаправление сдачи порожнего") || value(auto,"Контейнерный сток","Инструкция на сдачу порожнего","Перенаправление сдачи порожнего");
           const ok = !trip._missingCargo && !trip._missingAuto;
-          return <tr key={trip._container}><td><strong>{trip._container}</strong></td><td>{value(cargo,"Клиент") || value(auto,"Клиент") || '—'}</td><td><strong>{value(auto,"Исполнитель","Партнер","Перевозчик") || '—'}</strong></td><td>{value(auto,"Маршрут") || '—'}</td><td>{resolveDeparture(auto)}</td><td>{warehouse || '—'}</td><td>{stock || 'Нужно заполнить'}</td><td><strong>{value(auto,"Водитель") || '—'}</strong><small>{value(auto,"Номер автомашины","Транспортное средство")}</small></td><td><div className={styles.docActions}><button disabled={!ok || Boolean(generating)} onClick={() => generateDocument(trip,"cargo")}><b className={styles.documentIcon}>Г</b><span>ЭТрН на груз</span><small className={styles[docStatuses[trip._container+"cargo"]?.state]}>{docStatuses[trip._container+"cargo"]?.text ?? "Не сформирован"}</small></button><button className={styles.konturButton} disabled title="Передача черновика станет доступна после подключения API Контур.Логистики" aria-label="Передать черновик в Контур">↗<small>Контур</small></button><button disabled={!ok || Boolean(generating)} onClick={() => generateDocument(trip,"order")}><b className={styles.documentIcon}>З</b><span>Заявка перевозчику</span><small className={styles[docStatuses[trip._container+"order"]?.state]}>{docStatuses[trip._container+"order"]?.text ?? "Не сформирована"}</small></button><button className={styles.konturButton} disabled title="Передача черновика станет доступна после подключения API Контур.Логистики" aria-label="Передать черновик в Контур">↗<small>Контур</small></button><button disabled={!ok || Boolean(generating)} onClick={() => generateDocument(trip,"empty")}><b className={styles.documentIcon}>П</b><span>ЭТрН на порожний</span><small className={styles[docStatuses[trip._container+"empty"]?.state]}>{docStatuses[trip._container+"empty"]?.text ?? "Не сформирован"}</small></button><button className={styles.konturButton} disabled title="Передача черновика станет доступна после подключения API Контур.Логистики" aria-label="Передать черновик в Контур">↗<small>Контур</small></button></div></td><td>{(()=>{const summary=tripDocumentSummary(trip._container,ok,Boolean(trip._missingCargo));return <span className={styles[summary.tone]}><strong>{summary.title}</strong><small>{summary.detail}</small></span>;})()}</td></tr>;
+          const konturButton=(kind:"cargo"|"order"|"empty")=>{const status=konturStatuses[trip._container+kind];return <button className={styles.konturButton} disabled={!ok||!kontur.connected||status?.state==="working"} title={kontur.connected?"Создать черновик в Контур.Логистике":"Сначала подключите Контур"} onClick={()=>sendToKontur(trip,kind)} aria-label="Передать черновик в Контур">↗<small className={status?styles[status.state]:undefined}>{status?.text??"Контур"}</small></button>;};
+          return <tr key={trip._container}><td><strong>{trip._container}</strong></td><td>{value(cargo,"Клиент") || value(auto,"Клиент") || '—'}</td><td><strong>{value(auto,"Исполнитель","Партнер","Перевозчик") || '—'}</strong></td><td>{value(auto,"Маршрут") || '—'}</td><td>{resolveDeparture(auto)}</td><td>{warehouse || '—'}</td><td>{stock || 'Нужно заполнить'}</td><td><strong>{value(auto,"Водитель") || '—'}</strong><small>{value(auto,"Номер автомашины","Транспортное средство")}</small></td><td><div className={styles.docActions}><button disabled={!ok || Boolean(generating)} onClick={() => generateDocument(trip,"cargo")}><b className={styles.documentIcon}>Г</b><span>ЭТрН на груз</span><small className={styles[docStatuses[trip._container+"cargo"]?.state]}>{docStatuses[trip._container+"cargo"]?.text ?? "Не сформирован"}</small></button>{konturButton("cargo")}<button disabled={!ok || Boolean(generating)} onClick={() => generateDocument(trip,"order")}><b className={styles.documentIcon}>З</b><span>Заявка перевозчику</span><small className={styles[docStatuses[trip._container+"order"]?.state]}>{docStatuses[trip._container+"order"]?.text ?? "Не сформирована"}</small></button>{konturButton("order")}<button disabled={!ok || Boolean(generating)} onClick={() => generateDocument(trip,"empty")}><b className={styles.documentIcon}>П</b><span>ЭТрН на порожний</span><small className={styles[docStatuses[trip._container+"empty"]?.state]}>{docStatuses[trip._container+"empty"]?.text ?? "Не сформирован"}</small></button>{konturButton("empty")}</div></td><td>{(()=>{const summary=tripDocumentSummary(trip._container,ok,Boolean(trip._missingCargo));return <span className={styles[summary.tone]}><strong>{summary.title}</strong><small>{summary.detail}</small></span>;})()}</td></tr>;
         })}</tbody></table></div></section></>}
       </>}
     </section>

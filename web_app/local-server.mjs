@@ -4,6 +4,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { syncTms } from "./tms-sync.mjs";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
@@ -13,7 +14,61 @@ const appPort = 3001;
 const publicPort = Number(process.env.PORT || 3000);
 const cacheRoot = path.join(root,"work","source-cache");
 const credentialsFile = path.join(root,"work","tms-credentials.json");
+const konturTokenFile = path.join(root,"work","kontur-tokens.json");
 const referenceRoot = process.env.AGR_REFERENCES_DIR || path.join(root,"..","data","references");
+const konturIdentityUrl = "https://identity.kontur.ru";
+const diadocApiUrl = process.env.KONTUR_DIADOC_API_URL || "https://diadoc-api.kontur.ru";
+const konturScopes = process.env.KONTUR_SCOPES || "openid profile email offline_access kl.public.api kl.transportations.orders.public.api Diadoc.PublicAPI";
+const konturStates = new Map();
+
+const konturConfig = () => ({
+  clientId: process.env.KONTUR_CLIENT_ID || "",
+  clientSecret: process.env.KONTUR_CLIENT_SECRET || "",
+  redirectUri: process.env.KONTUR_REDIRECT_URI || "",
+  boxId: process.env.KONTUR_LOGISTICS_BOX_ID || "",
+});
+function loadKonturTokens() {
+  if (!fs.existsSync(konturTokenFile)) return null;
+  try { return JSON.parse(fs.readFileSync(konturTokenFile,"utf8")); } catch { return null; }
+}
+function saveKonturTokens(tokens) {
+  fs.mkdirSync(path.dirname(konturTokenFile),{recursive:true});
+  fs.writeFileSync(konturTokenFile,JSON.stringify(tokens),{encoding:"utf8",mode:0o600});
+  try { fs.chmodSync(konturTokenFile,0o600); } catch { /* Windows does not support POSIX modes */ }
+}
+async function exchangeKonturToken(parameters) {
+  const config=konturConfig();
+  const response=await fetch(`${konturIdentityUrl}/connect/token`,{
+    method:"POST",
+    headers:{"Content-Type":"application/x-www-form-urlencoded","Accept":"application/json"},
+    body:new URLSearchParams({...parameters,client_id:config.clientId,client_secret:config.clientSecret}),
+  });
+  const text=await response.text();
+  let result; try { result=JSON.parse(text); } catch { result={error_description:text}; }
+  if(!response.ok||!result.access_token) throw new Error(result.error_description||result.error||`Контур вернул HTTP ${response.status}`);
+  const previous=loadKonturTokens()||{};
+  const tokens={...previous,...result,expires_at:Date.now()+Number(result.expires_in||3600)*1000};
+  saveKonturTokens(tokens); return tokens;
+}
+async function getKonturAccessToken() {
+  const tokens=loadKonturTokens();
+  if(!tokens?.access_token) throw new Error("Сначала подключите учётную запись Контур");
+  if(Number(tokens.expires_at||0)>Date.now()+60_000) return tokens.access_token;
+  if(!tokens.refresh_token) throw new Error("Сеанс Контур истёк. Выполните вход повторно");
+  const refreshed=await exchangeKonturToken({grant_type:"refresh_token",refresh_token:tokens.refresh_token});
+  return refreshed.access_token;
+}
+async function verifyKonturBox(accessToken) {
+  const config=konturConfig();
+  const response=await fetch(`${diadocApiUrl}/GetMyOrganizations`,{headers:{Authorization:`Bearer ${accessToken}`,"Accept":"application/json"}});
+  const text=await response.text(); let result; try{result=JSON.parse(text);}catch{result={};}
+  if(!response.ok) throw new Error(result.message||`Не удалось проверить ящик Контур: HTTP ${response.status}`);
+  const boxes=(result.Organizations||[]).flatMap(organization=>organization.Boxes||[]);
+  if(!boxes.some(box=>String(box.BoxId).toLowerCase()===config.boxId.toLowerCase())) throw new Error("У пользователя нет доступа к указанному ящику Таглекс");
+}
+const konturDocumentFormat = (kind) => kind === "order"
+  ? {TypeNamedId:"LogisticsOrderRequest",Function:"default",Version:"zakzvper_05_01_01",EditingSettingId:"8AAFF7BA-FD5E-4346-B615-B1F96455968B"}
+  : {TypeNamedId:"LogisticsWaybill",Function:"reception",Version:"kl_trn_mt_05_01",EditingSettingId:"9D2B3E4A-7F1C-4E55-A6D0-1E8C5F2B9A37"};
 
 const sourceFiles = {
   cargo: () => path.join(cacheRoot,"cargo.xlsx"),
@@ -75,6 +130,53 @@ const types = { ".css":"text/css; charset=utf-8", ".js":"text/javascript; charse
 
 const server = http.createServer((request, response) => {
   const url = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
+  if (request.method === "GET" && url.pathname === "/api/kontur/status") {
+    const config=konturConfig(); const tokens=loadKonturTokens();
+    response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});
+    response.end(JSON.stringify({configured:Boolean(config.clientId&&config.clientSecret&&config.redirectUri&&config.boxId),connected:Boolean(tokens?.access_token),boxId:config.boxId||null})); return;
+  }
+  if (request.method === "GET" && url.pathname === "/api/kontur/login") {
+    const config=konturConfig();
+    if(!config.clientId||!config.clientSecret||!config.redirectUri||!config.boxId){response.writeHead(503,{"Content-Type":"text/plain; charset=utf-8"});response.end("Интеграция Контур не настроена на сервере");return;}
+    const state=randomBytes(24).toString("hex"); const nonce=randomBytes(24).toString("hex");
+    konturStates.set(state,{expiresAt:Date.now()+10*60_000,nonce});
+    const target=new URL(`${konturIdentityUrl}/connect/authorize`);
+    target.search=new URLSearchParams({response_type:"code",client_id:config.clientId,scope:konturScopes,redirect_uri:config.redirectUri,state,nonce}).toString();
+    response.writeHead(302,{Location:target.toString(),"Cache-Control":"no-store"}); response.end(); return;
+  }
+  if (request.method === "GET" && url.pathname === "/api/kontur/callback") {
+    void (async()=>{
+      const state=url.searchParams.get("state")||""; const pendingState=konturStates.get(state); konturStates.delete(state);
+      let receivedNewTokens=false;
+      try {
+        if(url.searchParams.get("error")) throw new Error(url.searchParams.get("error_description")||url.searchParams.get("error"));
+        if(!pendingState||pendingState.expiresAt<Date.now()) throw new Error("Проверка state не пройдена или время входа истекло");
+        const code=url.searchParams.get("code"); if(!code) throw new Error("Контур не вернул код авторизации");
+        const tokens=await exchangeKonturToken({grant_type:"authorization_code",code,redirect_uri:konturConfig().redirectUri});
+        receivedNewTokens=true;
+        await verifyKonturBox(tokens.access_token);
+        response.writeHead(302,{Location:"/workspace?kontur=connected","Cache-Control":"no-store"}); response.end();
+      } catch(error){if(receivedNewTokens)try{fs.unlinkSync(konturTokenFile);}catch{}response.writeHead(302,{Location:"/workspace?kontur=error&message="+encodeURIComponent(error.message||"Ошибка авторизации"),"Cache-Control":"no-store"});response.end();}
+    })(); return;
+  }
+  if (request.method === "POST" && url.pathname === "/api/kontur/draft") {
+    let body=""; request.setEncoding("utf8"); request.on("data",chunk=>{body+=chunk;if(body.length>15_000_000)request.destroy();}); request.on("end",()=>void(async()=>{
+      try {
+        const payload=JSON.parse(body); const config=konturConfig();
+        if(!["cargo","empty","order"].includes(payload.kind)) throw new Error("Неизвестный вид документа");
+        if(!payload.content||typeof payload.content!=="string") throw new Error("XML документа не передан");
+        const accessToken=await getKonturAccessToken(); const format=konturDocumentFormat(payload.kind);
+        const apiResponse=await fetch(`${diadocApiUrl}/V3/PostMessage`,{
+          method:"POST",headers:{Authorization:`Bearer ${accessToken}`,"Content-Type":"application/json; charset=utf-8","Accept":"application/json"},
+          body:JSON.stringify({FromBoxId:config.boxId,IsDraft:true,StrictDraftValidation:true,DocumentAttachments:[{SignedContent:{Content:payload.content},...format}]})
+        });
+        const text=await apiResponse.text(); let result; try{result=JSON.parse(text);}catch{result={message:text};}
+        if(!apiResponse.ok) throw new Error(result.message||result.error_description||result.error||`Диадок вернул HTTP ${apiResponse.status}`);
+        const document=result.Entities?.find(item=>item.EntityType==="Attachment")||result.Entities?.[0];
+        response.writeHead(200,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({ok:true,messageId:result.MessageId||null,entityId:document?.EntityId||null}));
+      }catch(error){response.writeHead(400,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({error:error.message||"Не удалось создать черновик в Контуре"}));}
+    })); return;
+  }
   if (request.method === "GET" && url.pathname === "/api/tms-status") {
     const configured=Boolean((process.env.TMS_LOGIN&&process.env.TMS_PASSWORD)||fs.existsSync(credentialsFile));
     response.writeHead(200,{"Content-Type":"application/json; charset=utf-8"});
