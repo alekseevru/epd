@@ -21,7 +21,6 @@ const referenceRoot = process.env.AGR_REFERENCES_DIR || path.join(root,"..","dat
 const konturIdentityUrl = "https://identity.kontur.ru";
 const diadocApiUrl = process.env.KONTUR_DIADOC_API_URL || "https://diadoc-api.kontur.ru";
 const konturScopes = process.env.KONTUR_SCOPES || "openid profile email offline_access kl.public.api kl.transportations.orders.public.api Diadoc.PublicAPI";
-const konturStates = new Map();
 
 const konturConfig = () => ({
   clientId: process.env.KONTUR_CLIENT_ID || "",
@@ -29,6 +28,11 @@ const konturConfig = () => ({
   redirectUri: process.env.KONTUR_REDIRECT_URI || "",
   boxId: process.env.KONTUR_LOGISTICS_BOX_ID || "",
 });
+const requestCookies = (request) => Object.fromEntries(String(request.headers.cookie||"").split(";").map(item=>item.trim().split(/=(.*)/s)).filter(([key])=>key).map(([key,value])=>[key,decodeURIComponent(value||"")]));
+const konturStateCookie = (state,maxAge=600) => {
+  const secure=konturConfig().redirectUri.startsWith("https://")?"; Secure":"";
+  return `kontur_oauth_state=${encodeURIComponent(state)}; Path=/api/kontur; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure}`;
+};
 function loadKonturTokens() {
   if (!fs.existsSync(konturTokenFile)) return null;
   try { return JSON.parse(fs.readFileSync(konturTokenFile,"utf8")); } catch { return null; }
@@ -143,24 +147,23 @@ const server = http.createServer((request, response) => {
     const config=konturConfig();
     if(!config.clientId||!config.clientSecret||!config.redirectUri||!config.boxId){response.writeHead(503,{"Content-Type":"text/plain; charset=utf-8"});response.end("Интеграция Контур не настроена на сервере");return;}
     const state=randomBytes(24).toString("hex"); const nonce=randomBytes(24).toString("hex");
-    konturStates.set(state,{expiresAt:Date.now()+10*60_000,nonce});
     const target=new URL(`${konturIdentityUrl}/connect/authorize`);
     target.search=new URLSearchParams({response_type:"code",client_id:config.clientId,scope:konturScopes,redirect_uri:config.redirectUri,state,nonce}).toString();
-    response.writeHead(302,{Location:target.toString(),"Cache-Control":"no-store"}); response.end(); return;
+    response.writeHead(302,{Location:target.toString(),"Set-Cookie":konturStateCookie(state),"Cache-Control":"no-store"}); response.end(); return;
   }
   if (request.method === "GET" && url.pathname === "/api/kontur/callback") {
     void (async()=>{
-      const state=url.searchParams.get("state")||""; const pendingState=konturStates.get(state); konturStates.delete(state);
+      const state=url.searchParams.get("state")||""; const expectedState=requestCookies(request).kontur_oauth_state||"";
       let receivedNewTokens=false;
       try {
         if(url.searchParams.get("error")) throw new Error(url.searchParams.get("error_description")||url.searchParams.get("error"));
-        if(!pendingState||pendingState.expiresAt<Date.now()) throw new Error("Проверка state не пройдена или время входа истекло");
+        if(!state||!expectedState||state!==expectedState) throw new Error("Проверка state не пройдена или время входа истекло");
         const code=url.searchParams.get("code"); if(!code) throw new Error("Контур не вернул код авторизации");
         const tokens=await exchangeKonturToken({grant_type:"authorization_code",code,redirect_uri:konturConfig().redirectUri});
         receivedNewTokens=true;
         await verifyKonturBox(tokens.access_token);
-        response.writeHead(302,{Location:"/workspace?kontur=connected","Cache-Control":"no-store"}); response.end();
-      } catch(error){if(receivedNewTokens)try{fs.unlinkSync(konturTokenFile);}catch{}response.writeHead(302,{Location:"/workspace?kontur=error&message="+encodeURIComponent(error.message||"Ошибка авторизации"),"Cache-Control":"no-store"});response.end();}
+        response.writeHead(302,{Location:"/workspace?kontur=connected","Set-Cookie":konturStateCookie("",0),"Cache-Control":"no-store"}); response.end();
+      } catch(error){if(receivedNewTokens)try{fs.unlinkSync(konturTokenFile);}catch{}response.writeHead(302,{Location:"/workspace?kontur=error&message="+encodeURIComponent(error.message||"Ошибка авторизации"),"Set-Cookie":konturStateCookie("",0),"Cache-Control":"no-store"});response.end();}
     })(); return;
   }
   if (request.method === "POST" && url.pathname === "/api/kontur/draft") {
