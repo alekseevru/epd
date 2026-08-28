@@ -103,16 +103,30 @@ function tmsDateTimestamp(value) {
   return Number.isFinite(timestamp) ? timestamp : NaN;
 }
 
+const wait = (milliseconds) => new Promise(resolve=>setTimeout(resolve,milliseconds));
+async function fetchTmsTable(url,options) {
+  let response;
+  for(let attempt=0;attempt<4;attempt+=1) {
+    response=await fetch(url,options);
+    if(![429,502,503,504].includes(response.status)) return response;
+    if(attempt<3) {
+      try { await response.body?.cancel(); } catch {}
+      await wait(750*(2**attempt));
+    }
+  }
+  return response;
+}
+
 async function getRows(session, table, fields, filters, createdSince = "") {
   const keys = Object.keys(fields);
   const minimumCreatedAt = createdSince ? Date.parse(createdSince + "T00:00:00Z") : NaN;
   const all = [];
-  const pageSize = 4000;
+  const pageSize = table === "OPERATION_SUB_DOC" ? 1000 : table === "OPERATION_UNIT" ? 2000 : 4000;
   const maxRows = ({OPERATION_UNIT:16000,OPERATION_SUB_DOC:24000,LIST_COMPANY:50000,LIST_AUTO:50000,LIST_DRIVERS:50000,LIST_WAREHOUSE:50000})[table] || 50000;
   for (let offset = 0; offset < maxRows; offset += pageSize) {
     const data = { viewedFields: keys, offset, limit: pageSize, sort: [{ ID: -1 }], ...(filters ? { filters } : {}) };
     const body = new URLSearchParams({ json: JSON.stringify(data) });
-    const response = await fetch(`${BASE}/api/table/get/${table}`, {
+    const response = await fetchTmsTable(`${BASE}/api/table/get/${table}`, {
       method: "POST", body,
       headers: { Cookie: session.cookie, Autorization: session.token, "TableApi2-method": "get" },
     });
@@ -189,9 +203,9 @@ export async function syncTms({ login: loginName, password, cacheDir, referenceD
       counts[key]=rows.length; onStatus(key,"saved",rows.length.toLocaleString("ru-RU")+" строк");
     } catch(error) { onStatus(key,"error",error.message||"Ошибка"); throw error; }
   };
-  // Transport registries and reference catalogs are independent, so download
-  // them concurrently in two controlled groups instead of six serial passes.
-  await Promise.all(tasks.slice(0,2).map(runTask));
+  // The two transport registries are the heaviest TMS queries. Run them one
+  // after another to avoid temporary 503 responses from the shared server.
+  for(const task of tasks.slice(0,2)) await runTask(task);
   await Promise.all(tasks.slice(2).map(runTask));
   return { ...counts, updatedAt: new Date().toISOString() };
 }
