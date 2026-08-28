@@ -260,7 +260,7 @@ export default function Workspace() {
       setDocStatuses((current)=>({...current,[key]:{state:"saved",text:"Сохранён"}}));
       if (!quiet) setMessage("Документ создан: " + result.filename);
       return true;
-    } catch (error) { const errorText=error instanceof Error ? error.message : "Ошибка формирования документа"; setDocStatuses((current)=>({...current,[key]:{state:"error",text:errorText}})); if (!quiet) setMessage(errorText); return false; }
+    } catch (error) { const errorText=error instanceof Error ? error.message : "Ошибка формирования документа"; setDocStatuses((current)=>({...current,[key]:{state:"error",text:errorText}})); if (!quiet) {setMessage(errorText);setStatusModalOpen(true);} return false; }
     finally { if (!quiet) setGenerating(""); }
   };
 
