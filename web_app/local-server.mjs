@@ -64,7 +64,9 @@ async function verifyKonturBox(accessToken) {
   const text=await response.text(); let result; try{result=JSON.parse(text);}catch{result={};}
   if(!response.ok) throw new Error(result.message||`Не удалось проверить ящик Контур: HTTP ${response.status}`);
   const boxes=(result.Organizations||[]).flatMap(organization=>organization.Boxes||[]);
-  if(!boxes.some(box=>String(box.BoxId).toLowerCase()===config.boxId.toLowerCase())) throw new Error("У пользователя нет доступа к указанному ящику Таглекс");
+  const expected=config.boxId.toLowerCase().replace(/@diadoc\.ru$/,"").replaceAll("-","");
+  const hasAccess=boxes.some(box=>[box.BoxIdGuid,box.BoxId].some(value=>String(value||"").toLowerCase().replace(/@diadoc\.ru$/,"").replaceAll("-","")===expected));
+  if(!hasAccess) throw new Error("У пользователя нет доступа к указанному ящику Таглекс");
 }
 const konturDocumentFormat = (kind) => kind === "order"
   ? {TypeNamedId:"LogisticsOrderRequest",Function:"default",Version:"zakzvper_05_01_01",EditingSettingId:"8AAFF7BA-FD5E-4346-B615-B1F96455968B"}
