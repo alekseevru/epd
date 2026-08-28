@@ -173,6 +173,9 @@ function writeWorkbook(target, sheetName, rows) {
   fs.mkdirSync(path.dirname(target), { recursive: true });
   XLSX.writeFile(workbook, target, { compression: true });
 }
+function writeGeneratorCache(target,rows) {
+  fs.writeFileSync(target,JSON.stringify(rows));
+}
 
 export async function syncTms({ login: loginName, password, cacheDir, referenceDir, onStatus = () => {} }) {
   onStatus("login","working","Входим в TMS…");
@@ -199,7 +202,9 @@ export async function syncTms({ login: loginName, password, cacheDir, referenceD
     try {
       const rows=await getRows(session,table,fields,filter,minimumDate);
       if(!rows.length) throw new Error("реестр пуст");
-      writeWorkbook(path.join(targetDir,filename),table,rows);
+      const target=path.join(targetDir,filename);
+      writeWorkbook(target,table,rows);
+      writeGeneratorCache(target.replace(/\.xlsx$/i,".json"),rows);
       counts[key]=rows.length; onStatus(key,"saved",rows.length.toLocaleString("ru-RU")+" строк");
     } catch(error) { onStatus(key,"error",error.message||"Ошибка"); throw error; }
   };

@@ -300,13 +300,17 @@ export default function Workspace() {
   const keyContainer=(key:string)=>key.replace(/(cargo|order|empty)$/,"");
   const tripDocumentSummary=(container:string,ok:boolean,missingCargo:boolean)=>{
     if(!ok)return {tone:"warning",title:"Недостаточно данных",detail:missingCargo?"Не найден груз":"Не найдена автоперевозка"};
-    const states=["cargo","order","empty"].map(kind=>docStatuses[container+kind]?.state);
+    const documents=[{kind:"cargo",title:"ЭТрН на груз"},{kind:"order",title:"Заявка перевозчику"},{kind:"empty",title:"ЭТрН на порожний"}];
+    const attempted=documents.map(item=>({...item,state:docStatuses[container+item.kind]?.state})).filter(item=>item.state);
+    if(!attempted.length)return {tone:"rowPending",title:"Не сформировано",detail:"Выберите нужный документ"};
+    const states=attempted.map(item=>item.state);
     const saved=states.filter(state=>state==="saved").length;
     const errors=states.filter(state=>state==="error").length;
-    if(errors)return {tone:"rowError",title:"Есть ошибки",detail:`Не создано: ${errors} из 3`};
-    if(saved===3)return {tone:"ok",title:"Комплект готов",detail:"Создано 3 из 3"};
-    if(states.some(state=>state==="working"||state==="queued"))return {tone:"rowWorking",title:"Формируется",detail:`Готово ${saved} из 3`};
-    return {tone:"rowPending",title:"Не сформировано",detail:`Готово ${saved} из 3`};
+    if(errors)return {tone:"rowError",title:"Есть ошибка",detail:`Ошибок: ${errors} из ${attempted.length}`};
+    const active=attempted.find(item=>item.state==="working"||item.state==="queued");
+    if(active)return {tone:"rowWorking",title:"Формируется",detail:active.title};
+    if(attempted.length===3&&saved===3)return {tone:"ok",title:"Комплект готов",detail:"Создано 3 из 3"};
+    return {tone:"ok",title:"Документ готов",detail:attempted.filter(item=>item.state==="saved").map(item=>item.title).join(", ")};
   };
 
   return <main className={styles.shell}>

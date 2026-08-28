@@ -113,6 +113,9 @@ const python = process.env.PYTHON_BIN || (process.platform === "win32" ? "C:/Use
 const workerScript = path.join(root,"..","universal_app","web_worker.py");
 let generatorWorker, workerBuffer="", requestSequence=0;
 const pending=new Map();
+function failPendingDocuments(message){
+  for(const [id,item] of pending){pending.delete(id);item({requestId:id,error:message});}
+}
 function startGeneratorWorker(){
   workerBuffer="";
   generatorWorker=spawn(python,[workerScript],{cwd:path.dirname(workerScript),stdio:["pipe","pipe","inherit"],env:{...process.env,
@@ -127,9 +130,11 @@ function startGeneratorWorker(){
     workerBuffer+=chunk; const lines=workerBuffer.split(/\r?\n/); workerBuffer=lines.pop()||"";
     for(const line of lines){if(!line.trim())continue;try{const result=JSON.parse(line);if(result.ready)continue;const item=pending.get(result.requestId);if(item){pending.delete(result.requestId);item(result);}}catch{}}
   });
+  generatorWorker.on("error",error=>failPendingDocuments("Не удалось запустить генератор XML: "+error.message));
+  generatorWorker.on("exit",code=>{if(code)failPendingDocuments("Генератор XML остановился с кодом "+code);});
 }
 function restartGeneratorWorker(){
-  for(const [id,item] of pending){item({requestId:id,error:"Справочники обновляются, повторите формирование"});} pending.clear();
+  failPendingDocuments("Справочники обновляются, повторите формирование");
   if(generatorWorker) generatorWorker.kill(); startGeneratorWorker();
 }
 startGeneratorWorker();
@@ -233,7 +238,9 @@ const server = http.createServer((request, response) => {
     let body=""; request.setEncoding("utf8"); request.on("data",chunk=>{body+=chunk;}); request.on("end",()=>{
       try {
         const payload=JSON.parse(body); const requestId=++requestSequence; payload.requestId=requestId;
-        pending.set(requestId,(result)=>{response.writeHead(result.error?400:200,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify(result));});
+        if(!generatorWorker||generatorWorker.exitCode!==null||generatorWorker.killed) startGeneratorWorker();
+        const timeout=setTimeout(()=>{const item=pending.get(requestId);if(item){pending.delete(requestId);item({requestId,error:"Генератор XML не ответил за 60 секунд"});}},60_000);
+        pending.set(requestId,(result)=>{clearTimeout(timeout);response.writeHead(result.error?400:200,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify(result));});
         generatorWorker.stdin.write(JSON.stringify(payload)+"\n");
       } catch(error){response.writeHead(400,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({error:error.message||"Некорректный запрос"}));}
     }); return;

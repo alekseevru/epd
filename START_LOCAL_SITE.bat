@@ -1,7 +1,6 @@
 @echo off
 setlocal
 title AGR Local Website
-set "PYTHON_BIN=python"
 cd /d "%~dp0web_app"
 
 set "AGR_NODE=C:\Users\alekseev\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe"
