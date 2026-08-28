@@ -76,8 +76,8 @@ async function verifyKonturBox(accessToken) {
   if(!hasAccess) throw new Error("У пользователя нет доступа к указанному ящику Таглекс");
 }
 const konturDocumentFormat = (kind) => kind === "order"
-  ? {TypeNamedId:"LogisticsOrderRequest",Function:"default",Version:"zakzvper_05_01_01",EditingSettingId:"8AAFF7BA-FD5E-4346-B615-B1F96455968B"}
-  : {TypeNamedId:"LogisticsWaybill",Function:"reception",Version:"kl_trn_mt_05_01",EditingSettingId:"9D2B3E4A-7F1C-4E55-A6D0-1E8C5F2B9A37"};
+  ? {TypeNamedId:"LogisticsOrderRequest",Function:"default",Version:"zakzvper_05_01_01"}
+  : {TypeNamedId:"LogisticsWaybill",Function:"reception",Version:"kl_trn_mt_05_01"};
 const konturDraftJobs=new Map();
 const setKonturDraftJob=(id,patch)=>konturDraftJobs.set(id,{...konturDraftJobs.get(id),...patch,updatedAt:Date.now()});
 async function createKonturDraft(jobId,payload){
