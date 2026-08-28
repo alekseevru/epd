@@ -189,14 +189,30 @@ class Catalogs:
             fields = (row.get("Номер склада и название"), row.get("Название"), row.get("Название (англ)"))
             normalized = [normalize_name(item) for item in fields if clean(item)]
             if key in normalized:
-                ranked.append((3, row))
+                match_score = 30
             elif any(key in item or item in key for item in normalized if len(item) >= 5):
-                ranked.append((2, row))
+                match_score = 20
+            else:
+                continue
+            completeness = (
+                6 * bool(clean(row.get("Адрес на русском языке")))
+                + 3 * bool(clean(row.get("Адрес")))
+                + 2 * bool(clean(row.get("ИНН")))
+                + bool(clean(row.get("Роли")))
+            )
+            ranked.append((match_score + completeness, row))
         if not ranked:
             return None
         ranked.sort(key=lambda item: item[0], reverse=True)
         best = [row for score, row in ranked if score == ranked[0][0]]
-        return best[0] if len(best) == 1 else None
+        if len(best) == 1:
+            return best[0]
+        addresses = {
+            normalize_name(row.get("Адрес на русском языке") or row.get("Адрес"))
+            for row in best
+            if clean(row.get("Адрес на русском языке") or row.get("Адрес"))
+        }
+        return best[0] if len(addresses) <= 1 else None
 
 
 def trip_container(row: dict) -> str:
