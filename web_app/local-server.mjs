@@ -78,6 +78,47 @@ async function verifyKonturBox(accessToken) {
 const konturDocumentFormat = (kind) => kind === "order"
   ? {TypeNamedId:"LogisticsOrderRequest",Function:"default",Version:"zakzvper_05_01_01",EditingSettingId:"8AAFF7BA-FD5E-4346-B615-B1F96455968B"}
   : {TypeNamedId:"LogisticsWaybill",Function:"reception",Version:"kl_trn_mt_05_01",EditingSettingId:"9D2B3E4A-7F1C-4E55-A6D0-1E8C5F2B9A37"};
+const konturDraftJobs=new Map();
+const setKonturDraftJob=(id,patch)=>konturDraftJobs.set(id,{...konturDraftJobs.get(id),...patch,updatedAt:Date.now()});
+async function createKonturDraft(jobId,payload){
+  try {
+    const config=konturConfig(); const format=konturDocumentFormat(payload.kind);
+    setKonturDraftJob(jobId,{state:"working",phase:"authorization",message:"Получаем действующий токен Контур"});
+    const accessToken=await getKonturAccessToken();
+    const operationId=randomBytes(16).toString("hex");
+    const requestBody=JSON.stringify({FromBoxId:config.boxId,IsDraft:true,StrictDraftValidation:false,DocumentAttachments:[{SignedContent:{Content:payload.content},...format}]});
+    const deadline=Date.now()+90_000; let apiResponse; let result={}; let attempt=0;
+    while(Date.now()<deadline){
+      attempt++;
+      setKonturDraftJob(jobId,{phase:"post-message",message:attempt===1?"XML передан в Диадок. Ожидаем создание черновика":`Диадок продолжает обработку. Проверка № ${attempt}`});
+      try {
+        apiResponse=await fetch(`${diadocApiUrl}/V3/PostMessage?operationId=${operationId}`,{
+          method:"POST",headers:{Authorization:`Bearer ${accessToken}`,"Content-Type":"application/json; charset=utf-8","Accept":"application/json"},
+          body:requestBody,signal:AbortSignal.timeout(Math.min(30_000,Math.max(1_000,deadline-Date.now())))
+        });
+      } catch(error) {
+        if(error?.name!=="TimeoutError"||Date.now()>=deadline) throw error;
+        setKonturDraftJob(jobId,{message:"Диадок пока не ответил. Повторяем безопасно с тем же номером операции"});
+        continue;
+      }
+      if(apiResponse.status===204){
+        const retryAfter=Math.max(1,Number.parseInt(apiResponse.headers.get("retry-after")||"2",10)||2);
+        setKonturDraftJob(jobId,{message:`Диадок обрабатывает документ. Следующая проверка через ${retryAfter} сек.`});
+        await new Promise(resolve=>setTimeout(resolve,Math.min(retryAfter*1_000,Math.max(0,deadline-Date.now()))));
+        continue;
+      }
+      const text=await apiResponse.text(); try{result=JSON.parse(text);}catch{result={message:text};}
+      if(!apiResponse.ok) throw new Error(result.message||result.error_description||result.error||`Диадок вернул HTTP ${apiResponse.status}`);
+      break;
+    }
+    if(!apiResponse||apiResponse.status===204) throw new Error("Диадок продолжает обрабатывать черновик дольше 90 секунд. Повторите передачу позднее.");
+    const document=result.Entities?.find(item=>item.EntityType==="Attachment")||result.Entities?.[0];
+    setKonturDraftJob(jobId,{state:"saved",phase:"complete",message:"Черновик создан",messageId:result.MessageId||null,entityId:document?.EntityId||null});
+  } catch(error) {
+    const message=error?.name==="TimeoutError"?"Контур не ответил за 90 секунд. Проверьте доступность API и повторите передачу":error.message||"Не удалось создать черновик в Контуре";
+    setKonturDraftJob(jobId,{state:"error",phase:"failed",message});
+  }
+}
 
 const sourceFiles = {
   cargo: () => path.join(cacheRoot,"cargo.xlsx"),
@@ -175,37 +216,20 @@ const server = http.createServer((request, response) => {
   if (request.method === "POST" && url.pathname === "/api/kontur/draft") {
     let body=""; request.setEncoding("utf8"); request.on("data",chunk=>{body+=chunk;if(body.length>15_000_000)request.destroy();}); request.on("end",()=>void(async()=>{
       try {
-        const payload=JSON.parse(body); const config=konturConfig();
+        const payload=JSON.parse(body);
         if(!["cargo","empty","order"].includes(payload.kind)) throw new Error("Неизвестный вид документа");
         if(!payload.content||typeof payload.content!=="string") throw new Error("XML документа не передан");
-        const accessToken=await getKonturAccessToken(); const format=konturDocumentFormat(payload.kind);
-        const operationId=crypto.randomUUID();
-        const requestBody=JSON.stringify({FromBoxId:config.boxId,IsDraft:true,StrictDraftValidation:false,DocumentAttachments:[{SignedContent:{Content:payload.content},...format}]});
-        const deadline=Date.now()+90_000; let apiResponse; let result={};
-        while(Date.now()<deadline){
-          try {
-            apiResponse=await fetch(`${diadocApiUrl}/V3/PostMessage?operationId=${operationId}`,{
-              method:"POST",headers:{Authorization:`Bearer ${accessToken}`,"Content-Type":"application/json; charset=utf-8","Accept":"application/json"},
-              body:requestBody,signal:AbortSignal.timeout(Math.min(30_000,Math.max(1_000,deadline-Date.now())))
-            });
-          } catch(error) {
-            if(error?.name!=="TimeoutError"||Date.now()>=deadline) throw error;
-            continue;
-          }
-          if(apiResponse.status===204){
-            const retryAfter=Math.max(1,Number.parseInt(apiResponse.headers.get("retry-after")||"2",10)||2);
-            await new Promise(resolve=>setTimeout(resolve,Math.min(retryAfter*1_000,Math.max(0,deadline-Date.now()))));
-            continue;
-          }
-          const text=await apiResponse.text(); try{result=JSON.parse(text);}catch{result={message:text};}
-          if(!apiResponse.ok) throw new Error(result.message||result.error_description||result.error||`Диадок вернул HTTP ${apiResponse.status}`);
-          break;
-        }
-        if(!apiResponse||apiResponse.status===204) throw new Error("Диадок продолжает обрабатывать черновик дольше 90 секунд. Повторите проверку позднее.");
-        const document=result.Entities?.find(item=>item.EntityType==="Attachment")||result.Entities?.[0];
-        response.writeHead(200,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({ok:true,messageId:result.MessageId||null,entityId:document?.EntityId||null}));
-      }catch(error){const message=error?.name==="TimeoutError"?"Контур не ответил за 90 секунд. Повторите попытку или проверьте доступность API":error.message||"Не удалось создать черновик в Контуре";response.writeHead(400,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({error:message}));}
+        const jobId=randomBytes(16).toString("hex");
+        konturDraftJobs.set(jobId,{state:"queued",phase:"queued",message:"Операция поставлена в очередь",createdAt:Date.now(),updatedAt:Date.now()});
+        void createKonturDraft(jobId,payload);
+        response.writeHead(202,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify({ok:true,jobId}));
+      }catch(error){response.writeHead(400,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({error:error.message||"Не удалось запустить создание черновика"}));}
     })); return;
+  }
+  if(request.method==="GET"&&url.pathname==="/api/kontur/draft-status"){
+    const jobId=url.searchParams.get("jobId")||""; const job=konturDraftJobs.get(jobId);
+    if(!job){response.writeHead(404,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({error:"Операция передачи не найдена. Возможно, сервер был перезапущен."}));return;}
+    response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify(job));return;
   }
   if (request.method === "GET" && url.pathname === "/api/tms-status") {
     const configured=Boolean((process.env.TMS_LOGIN&&process.env.TMS_PASSWORD)||fs.existsSync(credentialsFile));

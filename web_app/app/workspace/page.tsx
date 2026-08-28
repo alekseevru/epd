@@ -300,9 +300,21 @@ export default function Workspace() {
 
       currentStep="draft"; updateStep("draft","working","Передаём XML и ожидаем проверку документа в Диадоке");
       setKonturTransfer(current=>({...current,summary:"Создаём черновик в Контур.Логистике"}));
-      const response=await fetchWithTimeout("/api/kontur/draft",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({kind,content:document.content,filename:document.filename})},140_000);
-      const result=await response.json();
-      if(!response.ok||result.error) throw new Error(result.error||"Не удалось создать черновик");
+      const response=await fetchWithTimeout("/api/kontur/draft",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({kind,content:document.content,filename:document.filename})},15_000);
+      const queued=await response.json();
+      if(!response.ok||queued.error||!queued.jobId) throw new Error(queued.error||"Сервер не вернул номер операции");
+      let result:{state?:string;message?:string;messageId?:string;error?:string}={};
+      const pollingDeadline=Date.now()+130_000;
+      while(Date.now()<pollingDeadline){
+        await new Promise(resolve=>window.setTimeout(resolve,1_500));
+        const statusResponse=await fetchWithTimeout(`/api/kontur/draft-status?jobId=${encodeURIComponent(queued.jobId)}`,{cache:"no-store"},10_000);
+        result=await statusResponse.json();
+        if(!statusResponse.ok||result.error) throw new Error(result.error||"Не удалось получить статус передачи");
+        updateStep("draft","working",result.message||"Диадок обрабатывает документ");
+        if(result.state==="saved") break;
+        if(result.state==="error") throw new Error(result.message||"Диадок не создал черновик");
+      }
+      if(result.state!=="saved") throw new Error("Сервер не завершил создание черновика за отведённое время");
       updateStep("draft","saved",result.messageId?`Черновик создан, MessageId: ${result.messageId}`:"Черновик успешно создан");
       setKonturTransfer(current=>({...current,busy:false,summary:"Черновик успешно создан в Контур.Логистике"}));
       setKonturStatuses(current=>({...current,[key]:{state:"saved",text:"Черновик создан"}}));
