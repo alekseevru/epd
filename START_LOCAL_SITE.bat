@@ -1,7 +1,6 @@
 @echo off
 setlocal
 title AGR Local Website
-set "PYTHON_BIN=python"
 cd /d "%~dp0web_app"
 
 set "AGR_NODE=C:\Users\alekseev\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe"
@@ -26,25 +25,23 @@ if not exist "%AGR_PNPM%" (
 
 set "PATH=C:\Users\alekseev\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin;C:\Users\alekseev\.cache\codex-runtimes\codex-primary-runtime\dependencies\bin\fallback;%PATH%"
 
-if not exist "dist" (
-  echo Preparing the local website. This is required only once...
-  if "%AGR_PNPM%"=="npm" (
-    call npm run build
-  ) else (
-    call "%AGR_PNPM%" exec vinext build
-  )
-  if errorlevel 1 goto build_error
+echo Preparing the latest local website...
+if "%AGR_PNPM%"=="npm" (
+  call npm run build
+) else (
+  call "%AGR_PNPM%" exec vinext build
 )
+if errorlevel 1 goto build_error
 
 echo.
 echo ============================================================
 echo   AGR website is running
-echo   Address: http://127.0.0.1:3000
+echo   Address: http://localhost:3000
 echo   Keep this window open while the website is in use.
 echo ============================================================
 echo.
 
-start "" "http://127.0.0.1:3000"
+start "" "http://localhost:3000"
 "%AGR_NODE%" local-server.mjs
 echo.
 echo The website has stopped.

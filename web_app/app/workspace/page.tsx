@@ -5,6 +5,21 @@ import * as XLSX from "xlsx";
 import styles from "./workspace.module.css";
 
 type Row = Record<string, unknown>;
+type TransferStepState = "queued" | "working" | "saved" | "error";
+type TransferStepKey = "xml" | "connection" | "draft";
+type KonturTransferState = {
+  open:boolean; busy:boolean; container:string; documentTitle:string; summary:string;
+  steps:Record<TransferStepKey,{state:TransferStepState;message:string}>;
+};
+const emptyKonturTransferSteps=():KonturTransferState["steps"]=>({
+  xml:{state:"queued",message:"Ожидает"},
+  connection:{state:"queued",message:"Ожидает"},
+  draft:{state:"queued",message:"Ожидает"},
+});
+const fetchWithTimeout=async(input:RequestInfo|URL,init:RequestInit,timeoutMs:number)=>{
+  const controller=new AbortController(); const timeout=window.setTimeout(()=>controller.abort(),timeoutMs);
+  try{return await fetch(input,{...init,signal:controller.signal});}finally{window.clearTimeout(timeout);}
+};
 type DirectoryHandle = { name:string; getDirectoryHandle:(name:string,options:{create:boolean})=>Promise<DirectoryHandle>; getFileHandle:(name:string,options:{create:boolean})=>Promise<{createWritable:()=>Promise<{write:(data:Blob)=>Promise<void>;close:()=>Promise<void>}>}> };
 
 const openSourceDb = () => new Promise<IDBDatabase>((resolve,reject) => {
@@ -80,6 +95,7 @@ export default function Workspace() {
   const [docStatuses, setDocStatuses] = useState<Record<string,{state:"queued"|"working"|"saved"|"error";text:string}>>({});
   const [kontur, setKontur] = useState({configured:false,connected:false,boxId:""});
   const [konturStatuses, setKonturStatuses] = useState<Record<string,{state:"working"|"saved"|"error";text:string}>>({});
+  const [konturTransfer,setKonturTransfer]=useState<KonturTransferState>({open:false,busy:false,container:"",documentTitle:"",summary:"",steps:emptyKonturTransferSteps()});
   const restoredRef = useRef(false);
 
   useEffect(() => {
@@ -260,21 +276,53 @@ export default function Workspace() {
       setDocStatuses((current)=>({...current,[key]:{state:"saved",text:"Сохранён"}}));
       if (!quiet) setMessage("Документ создан: " + result.filename);
       return true;
-    } catch (error) { const errorText=error instanceof Error ? error.message : "Ошибка формирования документа"; setDocStatuses((current)=>({...current,[key]:{state:"error",text:errorText}})); if (!quiet) setMessage(errorText); return false; }
+    } catch (error) { const errorText=error instanceof Error ? error.message : "Ошибка формирования документа"; setDocStatuses((current)=>({...current,[key]:{state:"error",text:errorText}})); if (!quiet) {setMessage(errorText);setStatusModalOpen(true);} return false; }
     finally { if (!quiet) setGenerating(""); }
   };
 
   const sendToKontur = async (trip:Trip,kind:"cargo"|"empty"|"order") => {
-    const key=trip._container+kind; setKonturStatuses(current=>({...current,[key]:{state:"working",text:"Передаём…"}}));
+    const key=trip._container+kind;
+    const documentTitle=kind==="cargo"?"ЭТрН на груз":kind==="order"?"Заявка перевозчику":"ЭТрН на порожний";
+    let currentStep:TransferStepKey="xml";
+    const updateStep=(step:TransferStepKey,state:TransferStepState,message:string)=>setKonturTransfer(current=>({...current,steps:{...current.steps,[step]:{state,message}}}));
+    setKonturStatuses(current=>({...current,[key]:{state:"working",text:"Передаём…"}}));
+    setKonturTransfer({open:true,busy:true,container:trip._container,documentTitle,summary:"Подготавливаем документ для передачи",steps:{...emptyKonturTransferSteps(),xml:{state:"working",message:"Формируем XML из данных TMS и справочников"}}});
     try {
       const document=await prepareDocument(trip,kind);
-      const response=await fetch("/api/kontur/draft",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({kind,content:document.content,filename:document.filename})});
-      const result=await response.json();
-      if(!response.ok||result.error) throw new Error(result.error||"Не удалось создать черновик");
+      updateStep("xml","saved",`XML сформирован: ${document.filename}`);
+
+      currentStep="connection"; updateStep("connection","working","Проверяем авторизацию и доступ к ящику Контур");
+      setKonturTransfer(current=>({...current,summary:"Проверяем подключение к Контур.Логистике"}));
+      const statusResponse=await fetchWithTimeout("/api/kontur/status",{cache:"no-store"},15_000);
+      const status=await statusResponse.json();
+      if(!statusResponse.ok||!status.connected) throw new Error(status.error||"Подключение к Контур истекло. Выполните вход заново.");
+      updateStep("connection","saved",status.boxId?`Подключено к ящику ${status.boxId}`:"Авторизация подтверждена");
+
+      currentStep="draft"; updateStep("draft","working","Передаём XML и ожидаем проверку документа в Диадоке");
+      setKonturTransfer(current=>({...current,summary:"Создаём черновик в Контур.Логистике"}));
+      const response=await fetchWithTimeout("/api/kontur/draft",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({kind,content:document.content,filename:document.filename})},15_000);
+      const queued=await response.json();
+      if(!response.ok||queued.error||!queued.jobId) throw new Error(queued.error||"Сервер не вернул номер операции");
+      let result:{state?:string;message?:string;messageId?:string;error?:string}={};
+      const pollingDeadline=Date.now()+130_000;
+      while(Date.now()<pollingDeadline){
+        await new Promise(resolve=>window.setTimeout(resolve,1_500));
+        const statusResponse=await fetchWithTimeout(`/api/kontur/draft-status?jobId=${encodeURIComponent(queued.jobId)}`,{cache:"no-store"},10_000);
+        result=await statusResponse.json();
+        if(!statusResponse.ok||result.error) throw new Error(result.error||"Не удалось получить статус передачи");
+        updateStep("draft","working",result.message||"Диадок обрабатывает документ");
+        if(result.state==="saved") break;
+        if(result.state==="error") throw new Error(result.message||"Диадок не создал черновик");
+      }
+      if(result.state!=="saved") throw new Error("Сервер не завершил создание черновика за отведённое время");
+      updateStep("draft","saved",result.messageId?`Черновик создан, MessageId: ${result.messageId}`:"Черновик успешно создан");
+      setKonturTransfer(current=>({...current,busy:false,summary:"Черновик успешно создан в Контур.Логистике"}));
       setKonturStatuses(current=>({...current,[key]:{state:"saved",text:"Черновик создан"}}));
       setMessage(`Черновик ${document.filename} создан в Контур.Логистике`);
     } catch(error) {
-      const text=error instanceof Error?error.message:"Ошибка передачи в Контур";
+      const text=error instanceof DOMException&&error.name==="AbortError"?"Превышено время ожидания ответа. Проверьте доступность сервера и повторите передачу.":error instanceof Error?error.message:"Ошибка передачи в Контур";
+      updateStep(currentStep,"error",text);
+      setKonturTransfer(current=>({...current,busy:false,summary:`Передача остановлена на этапе «${currentStep==="xml"?"Формирование XML":currentStep==="connection"?"Подключение к Контур":"Создание черновика"}»`}));
       setKonturStatuses(current=>({...current,[key]:{state:"error",text}})); setMessage(text);
     }
   };
@@ -300,13 +348,17 @@ export default function Workspace() {
   const keyContainer=(key:string)=>key.replace(/(cargo|order|empty)$/,"");
   const tripDocumentSummary=(container:string,ok:boolean,missingCargo:boolean)=>{
     if(!ok)return {tone:"warning",title:"Недостаточно данных",detail:missingCargo?"Не найден груз":"Не найдена автоперевозка"};
-    const states=["cargo","order","empty"].map(kind=>docStatuses[container+kind]?.state);
+    const documents=[{kind:"cargo",title:"ЭТрН на груз"},{kind:"order",title:"Заявка перевозчику"},{kind:"empty",title:"ЭТрН на порожний"}];
+    const attempted=documents.map(item=>({...item,state:docStatuses[container+item.kind]?.state})).filter(item=>item.state);
+    if(!attempted.length)return {tone:"rowPending",title:"Не сформировано",detail:"Выберите нужный документ"};
+    const states=attempted.map(item=>item.state);
     const saved=states.filter(state=>state==="saved").length;
     const errors=states.filter(state=>state==="error").length;
-    if(errors)return {tone:"rowError",title:"Есть ошибки",detail:`Не создано: ${errors} из 3`};
-    if(saved===3)return {tone:"ok",title:"Комплект готов",detail:"Создано 3 из 3"};
-    if(states.some(state=>state==="working"||state==="queued"))return {tone:"rowWorking",title:"Формируется",detail:`Готово ${saved} из 3`};
-    return {tone:"rowPending",title:"Не сформировано",detail:`Готово ${saved} из 3`};
+    if(errors)return {tone:"rowError",title:"Есть ошибка",detail:`Ошибок: ${errors} из ${attempted.length}`};
+    const active=attempted.find(item=>item.state==="working"||item.state==="queued");
+    if(active)return {tone:"rowWorking",title:"Формируется",detail:active.title};
+    if(attempted.length===3&&saved===3)return {tone:"ok",title:"Комплект готов",detail:"Создано 3 из 3"};
+    return {tone:"ok",title:"Документ готов",detail:attempted.filter(item=>item.state==="saved").map(item=>item.title).join(", ")};
   };
 
   return <main className={styles.shell}>
@@ -344,5 +396,6 @@ export default function Workspace() {
     </section>
     {tmsModalOpen && <div className={styles.modalBackdrop}><section className={styles.statusModal} role="dialog" aria-modal="true" aria-label="Статус обновления TMS"><header><div><small>ОБНОВЛЕНИЕ ИЗ TMS</small><h2>{tmsBusy?"Получаем актуальные данные":"Обновление завершено"}</h2><p>{tmsBusy?"Обновление продолжится в фоне — окно можно закрыть.":message}</p></div><button onClick={()=>setTmsModalOpen(false)}>×</button></header><div className={styles.statusList}>{Object.entries(tmsStatuses).map(([key,status])=><article key={key} className={styles[status.state]}><b>{status.state==="saved"?"✓":status.state==="error"?"!":status.state==="working"?"…":"•"}</b><span><strong>{{login:"Вход в TMS",cargo:"Грузы → Текущие",auto:"ТТН / CMR",companies:"Контрагенты",vehicles:"Автомашины",drivers:"Водители",points:"Географические объекты",apply:"Применение справочников"}[key]||key}</strong><small>{status.state==="queued"?"В очереди":status.state==="working"?"Выполняется":status.state==="saved"?"Готово":"Ошибка"}</small></span><em>{status.message}</em></article>)}</div><footer><span>{Object.values(tmsStatuses).filter(item=>item.state==="saved").length} из {Object.keys(tmsStatuses).length} этапов завершено</span><button onClick={()=>setTmsModalOpen(false)}>{tmsBusy?"Скрыть окно":"Закрыть"}</button></footer></section></div>}
     {statusModalOpen && <div className={styles.modalBackdrop}><section className={styles.statusModal} role="dialog" aria-modal="true" aria-label="Статус формирования документов"><header><div><small>ФОРМИРОВАНИЕ ДОКУМЕНТОВ</small><h2>{generating==="all" ? "Документы формируются" : "Результат формирования"}</h2><p>{bulkProgress || message}</p></div><button onClick={()=>setStatusModalOpen(false)} disabled={generating==="all"}>×</button></header><div className={styles.statusList}>{Object.entries(docStatuses).map(([key,status])=><article key={key} className={styles[status.state]}><b>{status.state==="saved"?"✓":status.state==="error"?"!":status.state==="working"?"…":"•"}</b><span><strong>{keyContainer(key)}</strong><small>{kindTitle(key)}</small></span><em title={status.text}>{status.text}</em></article>)}</div><footer><span>{Object.values(docStatuses).filter(item=>item.state==="saved").length} сохранено · {Object.values(docStatuses).filter(item=>item.state==="error").length} ошибок</span><button onClick={()=>setStatusModalOpen(false)} disabled={generating==="all"}>{generating==="all"?"Дождитесь завершения":"Закрыть"}</button></footer></section></div>}
+    {konturTransfer.open && <div className={styles.modalBackdrop}><section className={styles.statusModal} role="dialog" aria-modal="true" aria-label="Статус передачи в Контур"><header><div><small>ПЕРЕДАЧА В КОНТУР</small><h2>{konturTransfer.container} · {konturTransfer.documentTitle}</h2><p>{konturTransfer.summary}</p></div><button onClick={()=>setKonturTransfer(current=>({...current,open:false}))}>×</button></header><div className={styles.statusList}>{(["xml","connection","draft"] as TransferStepKey[]).map(step=>{const status=konturTransfer.steps[step];const title={xml:"Формирование XML",connection:"Подключение к Контур",draft:"Создание черновика"}[step];return <article key={step} className={styles[status.state]}><b>{status.state==="saved"?"✓":status.state==="error"?"!":status.state==="working"?"…":"•"}</b><span><strong>{title}</strong><small>{status.state==="queued"?"Ожидает":status.state==="working"?"Выполняется":status.state==="saved"?"Готово":"Ошибка"}</small></span><em title={status.message}>{status.message}</em></article>;})}</div><footer><span>{Object.values(konturTransfer.steps).filter(item=>item.state==="saved").length} из 3 этапов завершено</span><button onClick={()=>setKonturTransfer(current=>({...current,open:false}))}>{konturTransfer.busy?"Скрыть окно":"Закрыть"}</button></footer></section></div>}
   </main>;
 }

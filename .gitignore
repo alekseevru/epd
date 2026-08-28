@@ -40,3 +40,7 @@ Thumbs.db
 # Python
 __pycache__/
 *.pyc
+data/references/companies.json
+data/references/vehicles.json
+data/references/drivers.json
+data/references/route-points.json
