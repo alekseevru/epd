@@ -81,7 +81,10 @@ def handle(request):
     instruction = clean(value(row, "Перенаправление сдачи порожнего", "Инструкция на сдачу порожнего", "Контейнерный сток"))
     stock = catalogs.stock(instruction)
     if not stock and instruction: stock = {"Название":instruction,"Адрес":instruction,"Адрес на русском языке":instruction}
-    ctx = generator.context(row, date.fromisoformat(request.get("date") or date.today().isoformat()), request.get("user") or "Алексеев Михаил Геннадьевич", stock)
+    user = clean(request.get("user"))
+    if not user:
+        raise ValueError("Не указан сотрудник, который формирует документ")
+    ctx = generator.context(row, date.fromisoformat(request.get("date") or date.today().isoformat()), user, stock)
     kind = request["kind"]
     warnings = generator.warnings(ctx, empty=kind == "empty", ezz=kind == "order")
     if warnings and not request.get("confirmWarnings"):

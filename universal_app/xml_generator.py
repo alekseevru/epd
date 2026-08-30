@@ -294,7 +294,9 @@ class Generator:
             "planned_arrival_datetime": _as_datetime(value(row, "Плановая дата прибытия", "Последняя план дата прибытия", "ETA (план дата прибытия)"), _as_datetime(value(row, "Планируемая дата доставки на склад", "Плановая дата доставки на склад"), datetime.combine(trip_date, time(17)))),
             "empty_delivery_datetime": _as_datetime(value(row, "Дата сдачи порожнего"), _as_datetime(value(row, "Плановая дата прибытия", "Последняя план дата прибытия", "ETA (план дата прибытия)"), datetime.combine(trip_date, time(9)))),
             "planned_departure_datetime": _as_datetime(value(row, "Плановая дата отправления"), datetime.combine(trip_date, time(9))),
-            "actual_departure_datetime": _as_datetime(value(row, "Фактическая дата отправления"), _as_datetime(value(row, "Плановая дата отправления"), datetime.combine(trip_date, time(9)))),
+            # По согласованной логике ЭТрН фактическое прибытие на погрузку
+            # совпадает с заявленной подачей; фактическое убытие ставится на час позже.
+            "actual_departure_datetime": _as_datetime(value(row, "Плановая дата отправления"), datetime.combine(trip_date, time(9))),
             "stock": stock,
         }
 
@@ -336,6 +338,8 @@ class Generator:
                 instructions.attrib.pop("СвПломба", None)
         cargo = info.find("СвГруз/ОпГруз")
         cargo.set("НаимГруз", f"Порожний контейнер {ctx['container']}" if empty else f"Контейнер {ctx['container']}")
+        if empty:
+            cargo.set("СпУпак", "Отсутствует")
         container_info = cargo.find("СвКонтейн")
         if container_info is not None:
             cargo.remove(container_info)
@@ -387,7 +391,10 @@ class Generator:
             loading_person.set("Должность", "Сотрудник")
             loading_person.find("ФИО").attrib = _fio(ctx["user"])
         owner = loading.find("ВладИнфр")
-        owner_data = ctx["delivery_owner"] if empty else ctx["loading_owner"]
+        # Для порожней перевозки погрузка выполняется на складе, куда был
+        # доставлен груз. Владельцем этого объекта является грузополучатель
+        # грузовой перевозки (клиент), а не грузоотправитель порожней ЭТрН.
+        owner_data = ctx["consignee"] if empty else ctx["loading_owner"]
         if owner is not None and owner_data.get("inn"):
             owner.set("СовпГОВ", "2")
             _set_legal(owner, owner_data)

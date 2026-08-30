@@ -37,6 +37,23 @@ function loadKonturTokens() {
   if (!fs.existsSync(konturTokenFile)) return null;
   try { return JSON.parse(fs.readFileSync(konturTokenFile,"utf8")); } catch { return null; }
 }
+function konturUserInfo(tokens) {
+  try {
+    const payload=String(tokens?.id_token||"").split(".")[1];
+    if(!payload)return null;
+    const normalized=payload.replaceAll("-","+").replaceAll("_","/").padEnd(Math.ceil(payload.length/4)*4,"=");
+    const claims=JSON.parse(Buffer.from(normalized,"base64").toString("utf8"));
+    return {name:claims.name||[claims.family_name,claims.given_name,claims.middle_name].filter(Boolean).join(" ")||claims.preferred_username||"Пользователь Контур",email:claims.email||"",username:claims.preferred_username||""};
+  } catch { return null; }
+}
+const konturPermissionLabels=()=>{
+  const scopes=new Set(konturScopes.split(/\s+/).filter(Boolean));
+  return [
+    scopes.has("Diadoc.PublicAPI")&&"Диадок API",
+    scopes.has("kl.public.api")&&"Контур.Логистика",
+    scopes.has("kl.transportations.orders.public.api")&&"Заявки перевозчику",
+  ].filter(Boolean);
+};
 function saveKonturTokens(tokens) {
   fs.mkdirSync(path.dirname(konturTokenFile),{recursive:true});
   fs.writeFileSync(konturTokenFile,JSON.stringify(tokens),{encoding:"utf8",mode:0o600});
@@ -188,7 +205,7 @@ const server = http.createServer((request, response) => {
   if (request.method === "GET" && url.pathname === "/api/kontur/status") {
     const config=konturConfig(); const tokens=loadKonturTokens();
     response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});
-    response.end(JSON.stringify({configured:Boolean(config.clientId&&config.clientSecret&&config.redirectUri&&config.boxId),connected:Boolean(tokens?.access_token),boxId:config.boxId||null})); return;
+    response.end(JSON.stringify({configured:Boolean(config.clientId&&config.clientSecret&&config.redirectUri&&config.boxId),connected:Boolean(tokens?.access_token),boxId:config.boxId||null,user:konturUserInfo(tokens),permissions:konturPermissionLabels()})); return;
   }
   if (request.method === "GET" && url.pathname === "/api/kontur/login") {
     const config=konturConfig();

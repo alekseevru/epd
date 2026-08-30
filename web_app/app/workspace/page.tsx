@@ -11,6 +11,11 @@ type KonturTransferState = {
   open:boolean; busy:boolean; container:string; documentTitle:string; summary:string;
   steps:Record<TransferStepKey,{state:TransferStepState;message:string}>;
 };
+type KonturStatus = {
+  configured:boolean; connected:boolean; boxId:string;
+  user:{name:string;email:string;username:string}|null;
+  permissions:string[];
+};
 const emptyKonturTransferSteps=():KonturTransferState["steps"]=>({
   xml:{state:"queued",message:"Ожидает"},
   connection:{state:"queued",message:"Ожидает"},
@@ -100,7 +105,7 @@ export default function Workspace() {
   const [bulkProgress, setBulkProgress] = useState("");
   const [statusModalOpen, setStatusModalOpen] = useState(false);
   const [docStatuses, setDocStatuses] = useState<Record<string,{state:"queued"|"working"|"saved"|"error";text:string}>>({});
-  const [kontur, setKontur] = useState({configured:false,connected:false,boxId:""});
+  const [kontur, setKontur] = useState<KonturStatus>({configured:false,connected:false,boxId:"",user:null,permissions:[]});
   const [konturStatuses, setKonturStatuses] = useState<Record<string,{state:"working"|"saved"|"error";text:string}>>({});
   const [konturTransfer,setKonturTransfer]=useState<KonturTransferState>({open:false,busy:false,container:"",documentTitle:"",summary:"",steps:emptyKonturTransferSteps()});
   const restoredRef = useRef(false);
@@ -137,13 +142,13 @@ export default function Workspace() {
   useEffect(() => {
     void fetch("/api/kontur/status",{cache:"no-store"}).then(async(response)=>{
       if(!response.ok) throw new Error("Статус Контур недоступен");
-      const status=await response.json() as {configured:boolean;connected:boolean;boxId?:string};
-      setKontur({configured:status.configured,connected:status.connected,boxId:status.boxId||""});
+      const status=await response.json() as {configured:boolean;connected:boolean;boxId?:string;user?:KonturStatus["user"];permissions?:string[]};
+      setKontur({configured:status.configured,connected:status.connected,boxId:status.boxId||"",user:status.user||null,permissions:status.permissions||[]});
       const parameters=new URLSearchParams(window.location.search);
       if(parameters.get("kontur")==="connected") setMessage("Контур подключён. Можно создавать черновики.");
       if(parameters.get("kontur")==="error") setMessage("Не удалось подключить Контур: "+(parameters.get("message")||"ошибка авторизации"));
       if(parameters.has("kontur")) window.history.replaceState({},document.title,window.location.pathname);
-    }).catch(()=>setKontur({configured:false,connected:false,boxId:""}));
+    }).catch(()=>setKontur({configured:false,connected:false,boxId:"",user:null,permissions:[]}));
   }, []);
 
   const resetSources=async()=>{await clearSourceFiles();setCargoRows([]);setAutoRows([]);setPoints([]);setCargoSource(null);setAutoSource(null);setPointsSource(null);setResults([]);setQuery("");setMessage("Сохранённые реестры удалены. Подключите актуальные файлы.");};
@@ -248,6 +253,7 @@ export default function Workspace() {
   };
 
   const prepareDocument = async (trip: Trip, kind: "cargo" | "empty" | "order") => {
+    if (!employee.trim()) throw new Error("Укажите сотрудника, который формирует документ");
     const row = { ...(trip._cargo ?? {}), ...(trip._auto ?? {}) };
       const requestDocument = async (confirmWarnings = false) => {
         const response = await fetch("/api/generate", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({kind,container:trip._container,row,date:new Date().toISOString().slice(0,10),user:employee.trim(),confirmWarnings}) });
@@ -281,7 +287,7 @@ export default function Workspace() {
         const link = document.createElement("a"); link.href = URL.createObjectURL(blob); link.download = result.filename; link.click(); URL.revokeObjectURL(link.href);
       }
       setDocStatuses((current)=>({...current,[key]:{state:"saved",text:"Сохранён"}}));
-      if (!quiet) setMessage("Документ создан: " + result.filename);
+      if (!quiet) setMessage("");
       return true;
     } catch (error) { const errorText=error instanceof Error ? error.message : "Ошибка формирования документа"; setDocStatuses((current)=>({...current,[key]:{state:"error",text:errorText}})); if (!quiet) {setMessage(errorText);setStatusModalOpen(true);} return false; }
     finally { if (!quiet) setGenerating(""); }
@@ -371,9 +377,9 @@ export default function Workspace() {
   return <main className={styles.shell}>
     <header className={styles.topbar}><div className={styles.logo}>А</div><div><strong>Создание ЭПД</strong><span>локальная версия</span></div><i/><b>{ready ? "База подключена" : "Нужны 2 файла"}</b></header>
     <section className={styles.content}>
-      <div className={styles.notice}>{busy ? "Читаем файл…" : message}</div>
+      {(busy||message)&&<div className={styles.notice}>{busy ? "Читаем файл…" : message}</div>}
       <section className={styles.konturPanel}>
-        <div><b>{kontur.connected?"✓":"К"}</b><span><strong>Контур.Логистика</strong><small>{kontur.connected?"Подключено — черновики доступны":kontur.configured?"Требуется вход сотрудника":"Интеграция не настроена на сервере"}</small></span></div>
+        <div><b>{kontur.connected?"✓":"К"}</b><span><strong>Контур.Логистика</strong><small>{kontur.connected?(kontur.user?.name||"Пользователь Контур"):kontur.configured?"Требуется вход сотрудника":"Интеграция не настроена на сервере"}</small>{kontur.connected&&kontur.user?.email&&<em>{kontur.user.email}</em>}{kontur.connected&&<em>Разрешено приложению: {kontur.permissions.length?kontur.permissions.join(" · "):"доступ к ящику подтверждён"}</em>}</span></div>
         {!kontur.connected&&<button disabled={!kontur.configured} onClick={()=>{window.location.href="/api/kontur/login";}}>{kontur.configured?"Войти через Контур":"Нет настроек API"}</button>}
       </section>
       <section className={styles.tmsPanel}>
@@ -391,7 +397,7 @@ export default function Workspace() {
 
       {ready && <>
         <section className={styles.search}><label><strong>Номера контейнеров</strong><textarea value={query} onChange={(event) => setQuery(event.target.value)} placeholder={'WEDU8636223\nTGBU5962912'}/></label><button onClick={search}>Найти перевозки →</button></section>
-        {results.length > 0 && <><section className={styles.bulkBar}><div><strong>Формирование документов</strong><small>{outputFolder ? "Папка: " + outputFolder : "Сначала выберите папку для XML"}</small></div><label className={styles.employeeField}><span>Сотрудник</span><input value={employee} onChange={event=>setEmployee(event.target.value)} placeholder="Фамилия Имя Отчество"/></label><button className={styles.folderButton} onClick={chooseOutputFolder}>Выбрать папку</button><button className={styles.bulkButton} disabled={Boolean(generating)} onClick={generateAll}>{generating === "all" ? (bulkProgress || "Формируем…") : "Создать все документы"}</button></section><section className={styles.results}><div className={styles.tableWrap}><table><thead><tr><th>Контейнер</th><th>Клиент</th><th>Перевозчик</th><th>Маршрут</th><th>Погрузка / выгрузка</th><th>Адрес отправления</th><th>Склад клиента</th><th>Контейнерный сток</th><th>Водитель и ТС</th><th>Документы</th><th>Статус</th></tr></thead><tbody>{results.map((trip) => {
+        {results.length > 0 && <><section className={styles.bulkBar}><div><strong>Формирование документов</strong><small>{outputFolder ? "Папка: " + outputFolder : "Папка не выбрана — XML будет скачан в папку «Загрузки»"}</small></div><label className={styles.employeeField}><span>Сотрудник для XML</span><input value={employee} onChange={event=>setEmployee(event.target.value)} placeholder="Фамилия Имя Отчество"/><small>Будет указан работником погрузки и подписантом</small></label><button className={styles.folderButton} onClick={chooseOutputFolder}>Выбрать папку</button><button className={styles.bulkButton} disabled={Boolean(generating)} onClick={generateAll}>{generating === "all" ? (bulkProgress || "Формируем…") : "Создать все документы"}</button></section><section className={styles.results}><div className={styles.tableWrap}><table><thead><tr><th>Контейнер</th><th>Клиент</th><th>Перевозчик</th><th>Маршрут</th><th>Погрузка / выгрузка</th><th>Адрес отправления</th><th>Склад клиента</th><th>Контейнерный сток</th><th>Водитель и ТС</th><th>Документы</th><th>Статус</th></tr></thead><tbody>{results.map((trip) => {
           const cargo = trip._cargo; const auto = trip._auto;
           const warehouse = value(cargo,"Место доставки на склад","Место доставки груза (Маршрут заказа)","Адрес доставки","Место прибытия") || value(auto,"Место прибытия");
           const stock = value(cargo,"Контейнерный сток","Инструкция на сдачу порожнего","Перенаправление сдачи порожнего") || value(auto,"Контейнерный сток","Инструкция на сдачу порожнего","Перенаправление сдачи порожнего");
