@@ -22,11 +22,17 @@ def load_catalogs():
         "drivers": Path(os.getenv("AGR_DRIVERS_FILE", r"G:\Common\SCI\AB Cargo\Справочники logos\Справочник водители.xlsx")),
         "points": Path(os.getenv("AGR_POINTS_FILE", r"G:\Common\SCI\AB Cargo\Справочники logos\Справочник Точки маршрута.xlsx")),
     }
-    if files["companies"].exists(): catalogs.companies = read_xlsx(files["companies"], "LIST_COMPANY")
+    def read_catalog(path, sheet):
+        json_path = path.with_suffix(".json")
+        if json_path.exists():
+            with json_path.open(encoding="utf-8") as stream:
+                return json.load(stream)
+        return read_xlsx(path, sheet)
+    if files["companies"].exists(): catalogs.companies = read_catalog(files["companies"], "LIST_COMPANY")
     if files["edo"].exists(): catalogs.edo = read_counteragents(files["edo"])
-    if files["vehicles"].exists(): catalogs.vehicles = read_xlsx(files["vehicles"], "LIST_AUTO")
-    if files["drivers"].exists(): catalogs.drivers = read_xlsx(files["drivers"], "LIST_DRIVERS")
-    if files["points"].exists(): catalogs.points = read_xlsx(files["points"], "LIST_WAREHOUSE")
+    if files["vehicles"].exists(): catalogs.vehicles = read_catalog(files["vehicles"], "LIST_AUTO")
+    if files["drivers"].exists(): catalogs.drivers = read_catalog(files["drivers"], "LIST_DRIVERS")
+    if files["points"].exists(): catalogs.points = read_catalog(files["points"], "LIST_WAREHOUSE")
     return catalogs
 
 
@@ -40,10 +46,18 @@ cargo_index, auto_index = {}, {}
 def refresh_sources():
     global source_stamp, cargo_index, auto_index
     cargo_file, auto_file = cache_dir / "cargo.xlsx", cache_dir / "auto.xlsx"
-    stamp = (cargo_file.stat().st_mtime_ns, auto_file.stat().st_mtime_ns)
+    cargo_json, auto_json = cargo_file.with_suffix(".json"), auto_file.with_suffix(".json")
+    cargo_source = cargo_json if cargo_json.exists() else cargo_file
+    auto_source = auto_json if auto_json.exists() else auto_file
+    stamp = (cargo_source.stat().st_mtime_ns, auto_source.stat().st_mtime_ns)
     if stamp == source_stamp: return
+    def read_source(path, xlsx_path, sheet):
+        if path.suffix == ".json":
+            with path.open(encoding="utf-8") as stream:
+                return json.load(stream)
+        return read_xlsx(xlsx_path, sheet)
     cargo_index = {}
-    for row in read_xlsx(cargo_file, "OPERATION_UNIT"):
+    for row in read_source(cargo_source, cargo_file, "OPERATION_UNIT"):
         for cell in row.values():
             text = clean(cell)
             if len(text) >= 11:
@@ -83,7 +97,10 @@ def handle(request):
     instruction = clean(value(row, "Перенаправление сдачи порожнего", "Инструкция на сдачу порожнего", "Контейнерный сток"))
     stock = catalogs.stock(instruction)
     if not stock and instruction: stock = {"Название":instruction,"Адрес":instruction,"Адрес на русском языке":instruction}
-    ctx = generator.context(row, date.fromisoformat(request.get("date") or date.today().isoformat()), request.get("user") or "Алексеев Михаил Геннадьевич", stock)
+    user = clean(request.get("user"))
+    if not user:
+        raise ValueError("Не указан сотрудник, который формирует документ")
+    ctx = generator.context(row, date.fromisoformat(request.get("date") or date.today().isoformat()), user, stock)
     kind = request["kind"]
     warnings = generator.warnings(ctx, empty=kind == "empty", ezz=kind == "order")
     if warnings and not request.get("confirmWarnings"):

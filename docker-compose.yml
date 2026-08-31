@@ -21,6 +21,13 @@ services:
       TMS_LOGIN: "${TMS_LOGIN:-}"
       TMS_PASSWORD: "${TMS_PASSWORD:-}"
 
+      # Авторизация и черновики Контур.Логистики / Диадок API.
+      KONTUR_CLIENT_ID: "${KONTUR_CLIENT_ID:-}"
+      KONTUR_CLIENT_SECRET: "${KONTUR_CLIENT_SECRET:-}"
+      KONTUR_REDIRECT_URI: "${KONTUR_REDIRECT_URI:-}"
+      KONTUR_LOGISTICS_BOX_ID: "${KONTUR_LOGISTICS_BOX_ID:-}"
+      KONTUR_SCOPES: "${KONTUR_SCOPES:-openid profile email offline_access kl.public.api kl.transportations.orders.public.api Diadoc.PublicAPI}"
+
       AGR_REFERENCES_DIR: /data/references
       AGR_COMPANIES_FILE: /data/references/companies.xlsx
       AGR_EDO_FILE: /data/references/counteragents.csv
