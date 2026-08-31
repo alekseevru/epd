@@ -230,10 +230,14 @@ class Generator:
     def context(self, row: dict, trip_date: date, user: str, stock: dict | None = None) -> dict:
         container = clean(row["_container"])
         client_name = clean(value(row, "Клиент", "Заказчик"))
-        consignee_name = clean(value(row, "Грузополучатель", "Клиент"))
+        explicit_consignee = clean(value(row, "Грузополучатель"))
+        consignee_text = re.split(r"\s+по\s+поручению\b", explicit_consignee, maxsplit=1, flags=re.IGNORECASE)[0]
+        consignee_inn_match = re.search(r"\bИНН\s*[:№-]?\s*(\d{10}|\d{12})\b", consignee_text, flags=re.IGNORECASE)
+        consignee_inn = consignee_inn_match.group(1) if consignee_inn_match else ""
+        consignee_name = clean(re.sub(r"\s+ИНН\s*[:№-]?\s*\d{10,12}\b.*$", "", consignee_text, flags=re.IGNORECASE)) if explicit_consignee else client_name
         carrier_name = clean(value(row, "Исполнитель", "Партнер", "Перевозчик"))
         client_company = self.catalogs.company(client_name)
-        consignee_company = self.catalogs.company(consignee_name)
+        consignee_company = self.catalogs.company(consignee_name, inn=consignee_inn)
         carrier_company = self.catalogs.company(carrier_name)
         driver_name = clean(value(row, "Водитель", "ФИО водителя"))
         driver = self.catalogs.driver(driver_name) or {}
