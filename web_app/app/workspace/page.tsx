@@ -157,7 +157,18 @@ export default function Workspace() {
   const cargoIndex = useMemo(() => new Map<string,Row>(cargoRows.map((row):[string,Row] => [rowContainer(row),row]).filter(([key]) => Boolean(key))), [cargoRows]);
   const autoIndex = useMemo(() => {
     const map = new Map<string, Row>();
-    autoRows.forEach((row) => { const key = rowContainer(row); if (key) map.set(key, row); });
+    const supplementalFields = ["Водитель","ФИО водителя","Телефон водителя","Номер автомашины","Транспортное средство","Номер прицепа"];
+    autoRows.forEach((row) => {
+      const key = rowContainer(row);
+      if (!key) return;
+      const selected = map.get(key);
+      if (!selected) { map.set(key, {...row}); return; }
+      const supplemented = {...selected};
+      supplementalFields.forEach((field) => {
+        if (!value(supplemented,field) && value(row,field)) supplemented[field]=row[field];
+      });
+      map.set(key,supplemented);
+    });
     return map;
   }, [autoRows]);
 
