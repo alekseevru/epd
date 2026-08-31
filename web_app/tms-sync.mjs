@@ -45,6 +45,7 @@ const driverFields = {
   DOC_INFO:"Кем выдан паспорт", DOC_NUMBER:"Номер паспорта", DOC_SERIAL:"Серия паспорта",
   TRADE_DRIVERS_DOC_NUMBER:"Номер водительского удостоверения", TRADE_DRIVERS_DOC_SERIAL:"Серия водительского удостоверения",
 };
+const driverDateFieldCandidates = ["PROXY_DATE_END", "DATE_END_PROXY", "PROXY_END_DATE", "POWER_OF_ATTORNEY_END_DATE"];
 const warehouseFields = {
   ID:"Номер записи", WAREHOUSE_NUMBER_AND_NAME:"Номер склада и название", LIST_CITY_NAME:"Город",
   LIST_COUNTRY_NAME:"Страна", LIST_REGION_NAME:"Регион", COORDS_ADDRESS:"Адрес", LIST_WAREHOUSE_NAME:"Название",
@@ -167,6 +168,18 @@ async function getRows(session, table, fields, filters, createdSince = "") {
   return all;
 }
 
+async function getDriverRows(session) {
+  let rowsWithoutDate = null;
+  for (const fieldName of driverDateFieldCandidates) {
+    try {
+      const rows = await getRows(session,"LIST_DRIVERS",{...driverFields,[fieldName]:"Дата окончания доверенности"},null,"");
+      rowsWithoutDate ||= rows;
+      if (rows.some(row=>String(row["Дата окончания доверенности"]||"").trim())) return rows;
+    } catch { /* Older TMS schemas may not expose this optional field. */ }
+  }
+  return rowsWithoutDate || getRows(session,"LIST_DRIVERS",driverFields,null,"");
+}
+
 function writeWorkbook(target, sheetName, rows) {
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(rows), sheetName);
@@ -200,7 +213,7 @@ export async function syncTms({ login: loginName, password, cacheDir, referenceD
   const runTask = async ([key,table,fields,filter,targetDir,filename,minimumDate]) => {
     onStatus(key,"working","Получаем данные…");
     try {
-      const rows=await getRows(session,table,fields,filter,minimumDate);
+      const rows=key==="drivers"?await getDriverRows(session):await getRows(session,table,fields,filter,minimumDate);
       if(!rows.length) throw new Error("реестр пуст");
       const target=path.join(targetDir,filename);
       writeWorkbook(target,table,rows);
