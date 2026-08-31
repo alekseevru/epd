@@ -27,6 +27,7 @@
 .employeeField input{width:100%;min-width:0;padding:10px 11px;border:1px solid #295d7244;border-radius:9px;background:#fff;color:var(--deep);font:inherit}
 @media(max-width:900px){.employeeField{width:100%}}
 .employeeField small{font-size:10px;line-height:1.25}.konturPanel em{color:#718087;font-size:11px;font-style:normal;overflow-wrap:anywhere}
+.topbar nav{display:flex;align-items:center;gap:4px;margin-left:24px}.topbar nav a{padding:9px 12px;border-radius:9px;color:#adc0c7;font-size:12px;font-weight:700;text-decoration:none}.topbar nav a:hover,.topbar nav .activeTab{background:#ffffff12;color:#fff}@media(max-width:850px){.topbar{height:auto;min-height:72px;flex-wrap:wrap;padding-block:12px}.topbar nav{order:4;width:100%;margin-left:0}.topbar nav a{flex:1;text-align:center}.topbar i{display:none}}
 
 /* Trip dates and aligned document controls */
 .tripDates{min-width:145px}.tripDates span{display:flex;flex-direction:column;gap:2px;margin-bottom:10px}.tripDates span:last-child{margin-bottom:0}.tripDates b{color:var(--ocean);font-size:10px}
