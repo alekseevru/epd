@@ -122,7 +122,14 @@ class Catalogs:
             if exact:
                 return exact[0]
         key = normalize_name(name)
-        exact = [r for r in candidates if normalize_name(r.get("Наименование") or r.get("Полное наименование")) == key]
+        exact = [
+            row for row in candidates
+            if key and any(
+                normalize_name(row.get(field)) == key
+                for field in ("Наименование", "Полное наименование", "Краткое наименование")
+                if clean(row.get(field))
+            )
+        ]
         if exact:
             exact.sort(key=lambda row: (bool(clean(row.get("ИНН"))), bool(clean(row.get("КПП")))), reverse=True)
             return exact[0]

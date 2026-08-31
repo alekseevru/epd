@@ -77,6 +77,17 @@ const autoFields = {
   UNITS_GROSS_WEIGHT: "Вес брутто",
   STOCK_NAME: "Место прибытия",
 };
+const autoConsigneeFieldCandidates=[
+  "DOC_PARENT_ORDER_COMPANY_CONSIGNEE_NAME",
+  "DOC_PARENT_ORDER_COMPANY_RECEIVER_NAME",
+  "DOC_PARENT_ORDER_COMPANY_RECIPIENT_NAME",
+  "DOC_PARENT_ORDER_CONSIGNEE_NAME",
+  "DOC_PARENT_ORDER_RECEIVER_NAME",
+  "DOC_PARENT_ORDER_RECIPIENT_NAME",
+  "COMPANY_CONSIGNEE_NAME",
+  "COMPANY_RECEIVER_NAME",
+  "CONSIGNEE_NAME",
+];
 
 function cookiesFrom(headers) {
   const values = typeof headers.getSetCookie === "function" ? headers.getSetCookie() : [headers.get("set-cookie") || ""];
@@ -118,7 +129,7 @@ async function fetchTmsTable(url,options) {
   return response;
 }
 
-async function getRows(session, table, fields, filters, createdSince = "") {
+async function getRows(session, table, fields, filters, createdSince = "", onProgress = () => {}) {
   const keys = Object.keys(fields);
   const minimumCreatedAt = createdSince ? Date.parse(createdSince + "T00:00:00Z") : NaN;
   const all = [];
@@ -163,21 +174,44 @@ async function getRows(session, table, fields, filters, createdSince = "") {
       row["Место прибытия"] ||= points.at(-1) || "";
       all.push(row);
     }
+    onProgress(all.length,`Получено ${all.length.toLocaleString("ru-RU")} строк`,Math.min(95,Math.max(5,Math.round(all.length/maxRows*95))));
     if (json.result.rows.length < pageSize) break;
   }
   return all;
 }
 
-async function getDriverRows(session) {
+async function supportsField(session,table,fieldName){
+  const body=new URLSearchParams({json:JSON.stringify({viewedFields:["ID",fieldName],offset:0,limit:1,sort:[{ID:-1}]})});
+  const response=await fetchTmsTable(`${BASE}/api/table/get/${table}`,{method:"POST",body,headers:{Cookie:session.cookie,Autorization:session.token,"TableApi2-method":"get"}});
+  if(!response.ok)return false;const json=await response.json().catch(()=>({}));return json?.result?.status==="success"&&Array.isArray(json?.result?.rows);
+}
+
+async function getAutoRows(session,filters,createdSince,onProgress){
+  const supported=[];
+  for(const fieldName of autoConsigneeFieldCandidates){
+    if(await supportsField(session,"OPERATION_SUB_DOC",fieldName))supported.push(fieldName);
+  }
+  if(!supported.length)return getRows(session,"OPERATION_SUB_DOC",autoFields,filters,createdSince,onProgress);
+  const fields={...autoFields};
+  supported.forEach((fieldName,index)=>{fields[fieldName]=`Грузополучатель (${index+1})`;});
+  const rows=await getRows(session,"OPERATION_SUB_DOC",fields,filters,createdSince,onProgress);
+  return rows.map(row=>{
+    row["Грузополучатель"]=supported.map((_,index)=>String(row[`Грузополучатель (${index+1})`]||"").trim()).find(Boolean)||"";
+    supported.forEach((_,index)=>delete row[`Грузополучатель (${index+1})`]);
+    return row;
+  });
+}
+
+async function getDriverRows(session,onProgress=()=>{}) {
   let rowsWithoutDate = null;
   for (const fieldName of driverDateFieldCandidates) {
     try {
-      const rows = await getRows(session,"LIST_DRIVERS",{...driverFields,[fieldName]:"Дата окончания доверенности"},null,"");
+      const rows = await getRows(session,"LIST_DRIVERS",{...driverFields,[fieldName]:"Дата окончания доверенности"},null,"",onProgress);
       rowsWithoutDate ||= rows;
       if (rows.some(row=>String(row["Дата окончания доверенности"]||"").trim())) return rows;
     } catch { /* Older TMS schemas may not expose this optional field. */ }
   }
-  return rowsWithoutDate || getRows(session,"LIST_DRIVERS",driverFields,null,"");
+  return rowsWithoutDate || getRows(session,"LIST_DRIVERS",driverFields,null,"",onProgress);
 }
 
 function writeWorkbook(target, sheetName, rows) {
@@ -213,7 +247,8 @@ export async function syncTms({ login: loginName, password, cacheDir, referenceD
   const runTask = async ([key,table,fields,filter,targetDir,filename,minimumDate]) => {
     onStatus(key,"working","Получаем данные…");
     try {
-      const rows=key==="drivers"?await getDriverRows(session):await getRows(session,table,fields,filter,minimumDate);
+      const progress=(count,message,progressValue)=>onStatus(key,"working",message,{count,progress:progressValue});
+      const rows=key==="drivers"?await getDriverRows(session,progress):key==="auto"?await getAutoRows(session,filter,minimumDate,progress):await getRows(session,table,fields,filter,minimumDate,progress);
       if(!rows.length) throw new Error("реестр пуст");
       const target=path.join(targetDir,filename);
       writeWorkbook(target,table,rows);

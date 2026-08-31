@@ -157,6 +157,28 @@ async function diadocEntityText(accessToken,boxId,messageId,entityId){
   if(!response.ok)throw new Error(`Не удалось прочитать титул: HTTP ${response.status}`);const bytes=Buffer.from(await response.arrayBuffer());
   const head=bytes.subarray(0,200).toString("ascii").toLowerCase();const encoding=head.includes("windows-1251")?"windows-1251":"utf-8";return new TextDecoder(encoding).decode(bytes);
 }
+const csvCell=value=>{const text=String(value??"");return /[;"\r\n]/.test(text)?`"${text.replaceAll('"','""')}"`:text;};
+const parseSemicolonCsv=text=>{const records=[];let record=[],cell="",quoted=false;const source=String(text||"").replace(/^\uFEFF/,"");for(let index=0;index<source.length;index++){const char=source[index];if(quoted){if(char==='"'&&source[index+1]==='"'){cell+='"';index++;}else if(char==='"')quoted=false;else cell+=char;}else if(char==='"')quoted=true;else if(char===';'){record.push(cell);cell="";}else if(char==='\n'){record.push(cell.replace(/\r$/, ""));records.push(record);record=[];cell="";}else cell+=char;}if(cell||record.length){record.push(cell.replace(/\r$/, ""));records.push(record);}const headers=records.shift()||[];return records.filter(row=>row.some(Boolean)).map(row=>Object.fromEntries(headers.map((header,index)=>[header,row[index]||""])));};
+async function syncKonturCounteragents(onProgress=()=>{}){
+  onProgress({phase:"authorization",progress:5,message:"Проверяем подключение к Диадоку"});
+  const accessToken=await getKonturAccessToken();const {boxId}=konturConfig();const counteragents=[];let afterIndexKey="";
+  for(let page=0;page<100;page++){
+    const suffix=afterIndexKey?`&afterIndexKey=${encodeURIComponent(afterIndexKey)}`:"";
+    const result=await diadocJson(`/V3/GetCounteragents?myBoxId=${encodeURIComponent(boxId)}${suffix}`,accessToken);
+    const portion=result.Counteragents||[];counteragents.push(...portion);const total=Math.max(counteragents.length,Number(result.TotalCount||0));onProgress({phase:"loading",progress:total?Math.min(90,10+Math.round(counteragents.length/total*80)):10,message:`Получено ${counteragents.length.toLocaleString("ru-RU")} из ${total.toLocaleString("ru-RU")} контрагентов`,count:counteragents.length,total});
+    if(portion.length<100)break;afterIndexKey=portion.at(-1)?.IndexKey||"";if(!afterIndexKey)break;
+  }
+  const headers=["Название организации","ИНН","КПП","Идентификатор участника ЭДО","Статус","Дата изменения статуса","Группа","Дата ликвидации контрагента","Организация работает в тестовом режиме","ID организации","ID ящика"];
+  const apiRows=counteragents.map(item=>{const organization=item.Organization||{};return [organization.FullName||organization.ShortName,organization.Inn,organization.Kpp,organization.FnsParticipantId,item.CounteragentStatus||item.Status,item.LastEventTimestamp,item.CounteragentGroupId,organization.IsActive&&!organization.LiquidationDate?"Действующая организация":organization.LiquidationDate||"Ликвидирована",organization.IsTest?"Да":"Нет",organization.OrgIdGuid||organization.OrgId,organization.Boxes?.[0]?.BoxIdGuid||organization.Boxes?.[0]?.BoxId];});
+  if(!apiRows.length)throw new Error("Диадок вернул пустой список контрагентов");
+  const target=sourceFiles.edo();const merged=new Map();
+  if(fs.existsSync(target)){for(const item of parseSemicolonCsv(fs.readFileSync(target,"utf8"))){const row=headers.map(header=>item[header]||"");const key=item["Идентификатор участника ЭДО"]||`${item["ИНН"]}|${item["КПП"]}|${item["ID ящика"]}`;if(key)merged.set(key,row);}}
+  for(const row of apiRows){const key=row[3]||`${row[1]}|${row[2]}|${row[10]}`;if(key)merged.set(key,row);}
+  const rows=[...merged.values()];onProgress({phase:"saving",progress:95,message:"Сохраняем и применяем обновлённый справочник"});fs.mkdirSync(path.dirname(target),{recursive:true});fs.writeFileSync(target,"\uFEFF"+[headers,...rows].map(row=>row.map(csvCell).join(";")).join("\r\n"),"utf8");restartGeneratorWorker();onProgress({phase:"complete",progress:100,message:`Справочник обновлён: ${rows.length.toLocaleString("ru-RU")} строк`});
+  return {count:rows.length,received:apiRows.length,preserved:rows.length-apiRows.length,updatedAt:new Date().toISOString()};
+}
+let counteragentSyncPromise=null;
+const runCounteragentSync=onProgress=>{if(!counteragentSyncPromise)counteragentSyncPromise=syncKonturCounteragents(onProgress).finally(()=>{counteragentSyncPromise=null;});return counteragentSyncPromise;};
 const konturDocumentUrl=(boxId,messageId,logisticsId,typeNamedId)=>{
   const normalizedBoxId=String(boxId||"").replace(/@diadoc\.ru$/i,"");
   if(typeNamedId==="LogisticsWaybill"&&normalizedBoxId&&logisticsId)return `https://logist.kontur.ru/${encodeURIComponent(normalizedBoxId)}/consignor/sign/waybill/${encodeURIComponent(logisticsId)}`;
@@ -196,6 +218,7 @@ const sourceFiles = {
   auto: () => path.join(cacheRoot,"auto.xlsx"),
   points: () => path.join(referenceRoot,"route-points.xlsx"),
   contracts: () => path.join(referenceRoot,"contracts.json"),
+  edo: () => path.join(referenceRoot,"counteragents.csv"),
 };
 function sourceStatus() {
   return Object.fromEntries(Object.entries(sourceFiles).map(([kind,getFile])=>{
@@ -308,6 +331,9 @@ const server = http.createServer((request, response) => {
   if(request.method==="GET"&&url.pathname==="/api/kontur/signing-control"){
     void(async()=>{try{const force=url.searchParams.get("refresh")==="1";if(force||!signingControlCache.value||signingControlCache.expiresAt<Date.now()){signingControlCache.value=await loadSigningControl();signingControlCache.expiresAt=Date.now()+5*60_000;}response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify(signingControlCache.value));}catch(error){const unauthorized=["Сначала подключите","Сеанс Контур","invalid_grant","Invalid auth token"].some(text=>error.message?.includes(text));response.writeHead(unauthorized?401:502,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify({error:unauthorized?"Сеанс Контур истёк. Выполните вход повторно":error.message||"Не удалось получить статусы документов из Контур"}));}})();return;
   }
+  if(request.method==="POST"&&url.pathname==="/api/kontur/sync-counteragents"){
+    response.writeHead(200,{"Content-Type":"application/x-ndjson; charset=utf-8","Cache-Control":"no-cache"});const send=payload=>response.write(JSON.stringify(payload)+"\n");void(async()=>{try{const result=await runCounteragentSync(event=>send({type:"progress",...event}));send({type:"complete",result});}catch(error){send({type:"error",error:error.message||"Не удалось обновить контрагентов из Диадока"});}finally{response.end();}})();return;
+  }
   if (request.method === "GET" && url.pathname === "/api/tms-status") {
     const configured=Boolean((process.env.TMS_LOGIN&&process.env.TMS_PASSWORD)||fs.existsSync(credentialsFile));
     response.writeHead(200,{"Content-Type":"application/json; charset=utf-8"});
@@ -318,7 +344,7 @@ const server = http.createServer((request, response) => {
     const getFile=sourceFiles[kind||""];
     const file=getFile?.();
     if(!file||!fs.existsSync(file)){response.writeHead(404);response.end();return;}
-    response.writeHead(200,{"Content-Type":"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet","Content-Disposition":`attachment; filename="${kind}.xlsx"`}); fs.createReadStream(file).pipe(response); return;
+    const isCsv=kind==="edo";response.writeHead(200,{"Content-Type":isCsv?"text/csv; charset=utf-8":"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet","Content-Disposition":`attachment; filename="${kind}.${isCsv?"csv":"xlsx"}"`}); fs.createReadStream(file).pipe(response); return;
   }
   if (request.method === "POST" && url.pathname === "/api/tms-update") {
     let body=""; request.setEncoding("utf8"); request.on("data",chunk=>body+=chunk); request.on("end",async()=>{
@@ -328,7 +354,7 @@ const server = http.createServer((request, response) => {
         const supplied=body?JSON.parse(body):{}; const credentials=supplied.login&&supplied.password?supplied:readTmsCredentials();
         if(!credentials) throw new Error("Укажите логин и пароль TMS");
         fs.mkdirSync(referenceRoot,{recursive:true});
-        const result=await syncTms({...credentials,cacheDir:cacheRoot,referenceDir:referenceRoot,onStatus:(key,state,message)=>send({type:"status",key,state,message})});
+        const result=await syncTms({...credentials,cacheDir:cacheRoot,referenceDir:referenceRoot,onStatus:(key,state,message,details={})=>send({type:"status",key,state,message,...details})});
         send({type:"status",key:"apply",state:"working",message:"Перезагружаем справочники…"}); restartGeneratorWorker();
         send({type:"status",key:"apply",state:"saved",message:"Справочники применены"}); send({type:"complete",result}); response.end();
       } catch(error){send({type:"fatal",error:error.message||"Не удалось обновить данные из TMS"});response.end();}
@@ -336,19 +362,23 @@ const server = http.createServer((request, response) => {
   }
   if (request.method === "POST" && url.pathname === "/api/cache-source") {
     const kind = url.searchParams.get("kind");
-    if (!["cargo","auto","points","contracts"].includes(kind || "")) { response.writeHead(400); response.end(); return; }
+    if (!["cargo","auto","points","contracts","edo"].includes(kind || "")) { response.writeHead(400); response.end(); return; }
     const chunks=[]; request.on("data",chunk=>chunks.push(chunk)); request.on("end",()=>{
       try {
         const cache=cacheRoot; fs.mkdirSync(cache,{recursive:true}); fs.mkdirSync(referenceRoot,{recursive:true});
-        const target=kind==="contracts"?path.join(referenceRoot,"contracts.json"):path.join(cache,kind+".xlsx");
+        const target=kind==="contracts"?path.join(referenceRoot,"contracts.json"):kind==="edo"?path.join(referenceRoot,"counteragents.csv"):path.join(cache,kind+".xlsx");
         const incoming=Buffer.concat(chunks);
         if(kind==="contracts"){
           const parsed=JSON.parse(incoming.toString("utf8").replace(/^\uFEFF/,""));
           if(!Array.isArray(parsed)||parsed.some(item=>!(item.client||item.carrier||item.counterparty)||!item.number)) throw new Error("Некорректный справочник договоров");
         }
+        if(kind==="edo"){
+          const header=incoming.toString("utf8").replace(/^\uFEFF/,"").split(/\r?\n/,1)[0]||"";
+          for(const required of ["ИНН","КПП","Идентификатор участника ЭДО"]){if(!header.split(";").map(item=>item.replace(/^"|"$/g,"").trim()).includes(required))throw new Error(`В CSV отсутствует колонка «${required}»`);}
+        }
         const unchanged=fs.existsSync(target) && fs.readFileSync(target).equals(incoming);
         if(!unchanged) fs.writeFileSync(target,incoming);
-        if(kind==="contracts"&&!unchanged) restartGeneratorWorker();
+        if((kind==="contracts"||kind==="edo")&&!unchanged) restartGeneratorWorker();
         response.writeHead(200,{"Content-Type":"application/json"}); response.end(JSON.stringify({ok:true,unchanged}));
       } catch(error){response.writeHead(400,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({error:error.message||"Не удалось сохранить справочник"}));}
     }); return;
@@ -384,6 +414,8 @@ const server = http.createServer((request, response) => {
 });
 
 server.listen(publicPort, "0.0.0.0", () => console.log(`AGR local website: http://127.0.0.1:${publicPort}`));
+const dailyCounteragentSync=()=>{const file=sourceFiles.edo();const fresh=fs.existsSync(file)&&Date.now()-fs.statSync(file).mtimeMs<24*60*60_000;if(!fresh&&loadKonturTokens()?.access_token)void runCounteragentSync(()=>{}).catch(error=>console.error("Daily counteragent sync:",error.message));};
+setTimeout(dailyCounteragentSync,20_000);const counteragentTimer=setInterval(dailyCounteragentSync,60*60_000);counteragentTimer.unref();
 const stop = () => { server.close(); app.kill(); if(generatorWorker) generatorWorker.kill(); };
 process.on("SIGINT", stop);
 process.on("SIGTERM", stop);
