@@ -386,7 +386,7 @@ export default function Workspace() {
   };
 
   return <main className={styles.shell}>
-    <header className={styles.topbar}><div className={styles.logo}>А</div><div><strong>Создание ЭПД</strong><span>локальная версия</span></div><i/><b>{ready ? "База подключена" : "Нужны 2 файла"}</b></header>
+    <header className={styles.topbar}><div className={styles.logo}>А</div><div><strong>Создание ЭПД</strong><span>локальная версия</span></div><nav><a className={styles.activeTab} href="/workspace">Создание документов</a><a href="/control">Контроль подписания</a></nav><i/><b>{ready ? "База подключена" : "Нужны 2 файла"}</b></header>
     <section className={styles.content}>
       {(busy||message)&&<div className={styles.notice}>{busy ? "Читаем файл…" : message}</div>}
       <section className={styles.konturPanel}>

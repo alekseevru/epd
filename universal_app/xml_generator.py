@@ -278,7 +278,12 @@ class Generator:
             "carrier_edo": self.catalogs.edo_id(carrier_company),
             "driver_name": driver_name or clean(driver.get("Полное имя")),
             "driver_phone": clean(value(row, "Телефон водителя") or driver.get("Телефон 1")),
+            "driver_license_series": clean(driver.get("Серия водительского удостоверения")),
+            "driver_license_number": clean(driver.get("Номер водительского удостоверения")),
             "driver_license": clean(driver.get("Серия водительского удостоверения")) + clean(driver.get("Номер водительского удостоверения")),
+            # В справочнике TMS дата выдачи ВУ хранится в поле
+            # «Дата окончания доверенности» по согласованной бизнес-логике.
+            "driver_license_issue_date": _as_datetime(driver.get("Дата окончания доверенности"), None),
             "truck_number": truck_number or clean(truck.get("Государственный номер")),
             "truck_brand": clean(truck.get("Марка")) or "Тягач",
             "trailer": clean(value(row, "Номер прицепа")),
@@ -346,16 +351,24 @@ class Generator:
         cargo.find("ПлМасГруз").set("МасБрутЗнач", "0" if empty else ctx["weight"])
         _set_legal(info.find("СвПер"), ctx["carrier"])
         driver = info.find("СвВодит")
-        license_value = re.sub(r"\W", "", ctx["driver_license"])
+        license_series = re.sub(r"\W", "", clean(ctx.get("driver_license_series")))
+        license_number = re.sub(r"\W", "", clean(ctx.get("driver_license_number")))
+        license_value = license_series + license_number or re.sub(r"\W", "", ctx["driver_license"])
         has_driver_data = bool(ctx["driver_name"] or ctx["driver_phone"] or license_value)
         if driver is not None and has_driver_data:
-            if len(license_value) >= 7:
+            if license_series and license_number:
+                driver.set("СерВУ", license_series)
+                driver.set("НомВУ", license_number)
+            elif len(license_value) >= 7:
                 driver.set("СерВУ", license_value[:-6])
                 driver.set("НомВУ", license_value[-6:])
             else:
                 driver.attrib.pop("СерВУ", None)
                 driver.attrib.pop("НомВУ", None)
-            driver.attrib.pop("ДатаВыдВУ", None)
+            if ctx.get("driver_license_issue_date"):
+                driver.set("ДатаВыдВУ", ctx["driver_license_issue_date"].strftime("%d.%m.%Y"))
+            else:
+                driver.attrib.pop("ДатаВыдВУ", None)
             phone = driver.find("Тлф")
             if ctx["driver_phone"]:
                 if phone is None:

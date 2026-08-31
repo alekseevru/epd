@@ -54,6 +54,7 @@ const konturPermissionLabels=()=>{
     scopes.has("kl.transportations.orders.public.api")&&"Заявки перевозчику",
   ].filter(Boolean);
 };
+const konturReturnCookie=(returnTo,maxAge=600)=>{const secure=konturConfig().redirectUri.startsWith("https://")?"; Secure":"";return `kontur_return_to=${encodeURIComponent(returnTo)}; Path=/api/kontur; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure}`;};
 function saveKonturTokens(tokens) {
   fs.mkdirSync(path.dirname(konturTokenFile),{recursive:true});
   fs.writeFileSync(konturTokenFile,JSON.stringify(tokens),{encoding:"utf8",mode:0o600});
@@ -137,6 +138,59 @@ async function createKonturDraft(jobId,payload){
   }
 }
 
+const xmlDecode=value=>String(value||"").replace(/&quot;/g,'"').replace(/&apos;/g,"'").replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/&amp;/g,"&");
+const xmlAttribute=(xml,name)=>{const match=String(xml||"").match(new RegExp(`${name}=["']([^"']*)["']`,"i"));return xmlDecode(match?.[1]||"").trim();};
+const xmlSection=(xml,tag)=>{const match=String(xml||"").match(new RegExp(`<${tag}(?=\\s|/?>)[^>]*>[\\s\\S]*?<\\/${tag}>|<${tag}(?=\\s|/?>)[^>]*/>`,"i"));return match?.[0]||"";};
+const xmlParty=(xml,tag)=>xmlAttribute(xmlSection(xml,tag),"НаимОрг")||"Не указано";
+const ticksToDate=ticks=>{if(!ticks)return null;const value=Number(ticks);return Number.isFinite(value)?new Date(value/10_000-62135596800000):null;};
+const documentDate=value=>{const match=String(value||"").match(/^(\d{2})\.(\d{2})\.(\d{4})$/);return match?new Date(`${match[3]}-${match[2]}-${match[1]}T00:00:00+03:00`):null;};
+const addHours=(date,hours)=>date?new Date(date.getTime()+hours*3_600_000):null;
+const describeDelay=date=>{if(!date)return {status:"waiting",text:"Контрольная дата не определена"};const hours=(Date.now()-date.getTime())/3_600_000;if(hours>0)return {status:"overdue",text:hours>=48?`Просрочено на ${Math.floor(hours/24)} дн.`:`Просрочено на ${Math.max(1,Math.floor(hours))} ч.`};if(hours>-24)return {status:"dueSoon",text:"Срок в течение суток"};return {status:"waiting",text:`Осталось ${Math.max(1,Math.ceil(-hours/24))} дн.`};};
+const mapLimit=async(items,limit,handler)=>{const result=new Array(items.length);let cursor=0;await Promise.all(Array.from({length:Math.min(limit,items.length)},async()=>{while(cursor<items.length){const index=cursor++;result[index]=await handler(items[index],index);}}));return result;};
+async function diadocJson(pathname,accessToken,options={}){
+  const response=await fetch(`${diadocApiUrl}${pathname}`,{...options,headers:{Authorization:`Bearer ${accessToken}`,Accept:"application/json; charset=utf-8",...(options.body?{"Content-Type":"application/json; charset=utf-8"}:{}),...options.headers},signal:AbortSignal.timeout(45_000)});
+  const text=await response.text();let result={};try{result=JSON.parse(text);}catch{result={message:text};}
+  if(!response.ok)throw new Error(result.message||result.error_description||result.error||`Диадок вернул HTTP ${response.status}`);return result;
+}
+async function diadocEntityText(accessToken,boxId,messageId,entityId){
+  const response=await fetch(`${diadocApiUrl}/V4/GetEntityContent?boxId=${encodeURIComponent(boxId)}&messageId=${encodeURIComponent(messageId)}&entityId=${encodeURIComponent(entityId)}`,{headers:{Authorization:`Bearer ${accessToken}`},signal:AbortSignal.timeout(45_000)});
+  if(!response.ok)throw new Error(`Не удалось прочитать титул: HTTP ${response.status}`);const bytes=Buffer.from(await response.arrayBuffer());
+  const head=bytes.subarray(0,200).toString("ascii").toLowerCase();const encoding=head.includes("windows-1251")?"windows-1251":"utf-8";return new TextDecoder(encoding).decode(bytes);
+}
+const konturDocumentUrl=(boxId,messageId,logisticsId,typeNamedId)=>{
+  const normalizedBoxId=String(boxId||"").replace(/@diadoc\.ru$/i,"");
+  if(typeNamedId==="LogisticsWaybill"&&normalizedBoxId&&logisticsId)return `https://logist.kontur.ru/${encodeURIComponent(normalizedBoxId)}/consignor/sign/waybill/${encodeURIComponent(logisticsId)}`;
+  const template=process.env.KONTUR_DOCUMENT_URL_TEMPLATE||"";
+  return template?template.replaceAll("{boxId}",encodeURIComponent(normalizedBoxId)).replaceAll("{messageId}",encodeURIComponent(messageId)).replaceAll("{entityId}",encodeURIComponent(logisticsId)):null;
+};
+let signingControlCache={expiresAt:0,value:null};
+async function loadSigningControl(){
+  const config=konturConfig();const accessToken=await getKonturAccessToken();const months=Math.max(1,Number(process.env.KONTUR_CONTROL_MONTHS||4));const from=new Date();from.setMonth(from.getMonth()-months);
+  const formatDate=date=>`${String(date.getDate()).padStart(2,"0")}.${String(date.getMonth()+1).padStart(2,"0")}.${date.getFullYear()}`;
+  const documents=[];let afterIndexKey="";for(let page=0;page<10;page++){const body={DocumentTypeNamedIds:["LogisticsWaybill","LogisticsOrderRequest"],DocumentCategory:"Any",FromDocumentDate:formatDate(from),SortDirection:"Descending",Count:100,...(afterIndexKey?{AfterIndexKey:afterIndexKey}:{})};const list=await diadocJson(`/V4/GetDocuments?boxId=${encodeURIComponent(config.boxId)}`,accessToken,{method:"POST",body:JSON.stringify(body)});const portion=list.Documents||[];documents.push(...portion);if(portion.length<100)break;afterIndexKey=portion.at(-1)?.IndexKey||"";if(!afterIndexKey)break;}
+  const unique=[];const seen=new Set();for(const document of documents){if(document.IsDeleted)continue;const key=`${document.MessageId}:${document.EntityId}`;if(!seen.has(key)){seen.add(key);unique.push(document);}}
+  const docflows=[];for(let offset=0;offset<unique.length;offset+=100){const part=unique.slice(offset,offset+100);const response=await diadocJson(`/V5/GetDocflows?boxId=${encodeURIComponent(config.boxId)}`,accessToken,{method:"POST",body:JSON.stringify({Requests:part.map(item=>({DocumentId:{MessageId:item.MessageId,EntityId:item.EntityId}}))})});docflows.push(...(response.Documents||[]));}
+  const flowById=new Map(docflows.map(item=>[`${item.DocumentId?.MessageId}:${item.DocumentId?.EntityId}`,item]));
+  const items=(await mapLimit(unique,5,async document=>{
+    const flow=flowById.get(`${document.MessageId}:${document.EntityId}`);if(flow?.DocumentInfo?.IsDeleted)return [];const waiting=(flow?.Docflow?.Titles||[]).filter(title=>title.AuthorSigning&&title.AuthorSigning.IsFinished===false&&title.AuthorSigning.Status==="TitleAuthorStatusWaiting");if(!waiting.length)return [];
+    const customData=Object.fromEntries((document.CustomData||[]).map(item=>[item.Key,item.Value]));
+    const initialParts=String(customData["kl-initial-document-id"]||"").split(":");
+    const sourceMessageId=initialParts.length===3?initialParts[1]:document.MessageId;
+    const sourceEntityId=initialParts.length===3?initialParts[2]:document.EntityId;
+    let xml="";try{xml=await diadocEntityText(accessToken,config.boxId,sourceMessageId,sourceEntityId);}catch{try{xml=await diadocEntityText(accessToken,config.boxId,document.MessageId,document.EntityId);}catch{/* metadata remains available */}}
+    const isOrder=document.TypeNamedId==="LogisticsOrderRequest";const container=(xml.match(/[A-Z]{4}\d{7}/)||[])[0]||"—";const client=xmlParty(xml,"СвЗак");const carrier=xmlParty(xml,"СвПер")!=="Не указано"?xmlParty(xml,"СвПер"):xmlParty(xml,"СвИсп");const consignee=xmlParty(xml,"СвГП");
+    return waiting.map(title=>{const titleNumber=Number(title.TitleIndex||0)+1;let controlDate=null;let controlDateLabel="Дата документа";
+      if(isOrder){controlDate=addHours(documentDate(document.DocumentDate)||new Date(document.CreationTimestamp||Date.now()),Number(process.env.KONTUR_ORDER_RESPONSE_HOURS||24));controlDateLabel="Срок ответа перевозчика";}
+      else if(titleNumber===2){controlDate=new Date(xmlAttribute(xml,"ЗаявПогр")||xmlAttribute(xml,"StatedArrivalDateTime")||"");controlDateLabel="Плановая подача ТС под погрузку";}
+      else if(titleNumber===3){controlDate=new Date(xmlAttribute(xml,"ДатВрДостГр")||xmlAttribute(xml,"DeliveryDateTime")||"");controlDateLabel="Плановая доставка груза";}
+      else if(titleNumber===4){controlDate=new Date(xmlAttribute(xml,"ФДатВрУбыт")||xmlAttribute(xml,"ActualDepartureDateTime")||xmlAttribute(xml,"ФДатВрПриб")||"");controlDateLabel="Фактическое завершение выгрузки";}
+      if(!controlDate||Number.isNaN(controlDate.getTime()))controlDate=documentDate(document.DocumentDate)||ticksToDate(document.SendTimestampTicks)||new Date(document.CreationTimestamp||Date.now());const delay=describeDelay(controlDate);
+      const responsible=titleNumber===3?"Грузополучатель":titleNumber===1?"Грузоотправитель":"Перевозчик";
+      return {id:`${document.MessageId}:${document.EntityId}:${titleNumber}`,documentType:isOrder?"Заявка":"ЭТрН",number:document.DocumentNumber||xmlAttribute(xml,isOrder?"НомерЗаяв":"НомерТрН")||"Без номера",container,client,carrier,consignee,waitingTitle:`Т${titleNumber}`,responsible,status:delay.status,statusText:`Ожидается подпись: ${responsible.toLowerCase()}`,controlDate:controlDate.toISOString(),controlDateLabel,overdueText:delay.text,messageId:document.MessageId,entityId:document.EntityId,documentUrl:konturDocumentUrl(config.boxId,document.MessageId,customData["kl-id"]||sourceEntityId,document.TypeNamedId)};});
+  })).flat();
+  return {source:"kontur",generatedAt:new Date().toISOString(),connected:true,user:konturUserInfo(loadKonturTokens()),items,note:null};
+}
+
 const sourceFiles = {
   cargo: () => path.join(cacheRoot,"cargo.xlsx"),
   auto: () => path.join(cacheRoot,"auto.xlsx"),
@@ -210,14 +264,14 @@ const server = http.createServer((request, response) => {
   if (request.method === "GET" && url.pathname === "/api/kontur/login") {
     const config=konturConfig();
     if(!config.clientId||!config.clientSecret||!config.redirectUri||!config.boxId){response.writeHead(503,{"Content-Type":"text/plain; charset=utf-8"});response.end("Интеграция Контур не настроена на сервере");return;}
-    const state=randomBytes(24).toString("hex"); const nonce=randomBytes(24).toString("hex");
+    const state=randomBytes(24).toString("hex"); const nonce=randomBytes(24).toString("hex");const returnTo=url.searchParams.get("returnTo")==="/control"?"/control":"/workspace";
     const target=new URL(`${konturIdentityUrl}/connect/authorize`);
     target.search=new URLSearchParams({response_type:"code",client_id:config.clientId,scope:konturScopes,redirect_uri:config.redirectUri,state,nonce}).toString();
-    response.writeHead(302,{Location:target.toString(),"Set-Cookie":konturStateCookie(state),"Cache-Control":"no-store"}); response.end(); return;
+    response.writeHead(302,{Location:target.toString(),"Set-Cookie":[konturStateCookie(state),konturReturnCookie(returnTo)],"Cache-Control":"no-store"}); response.end(); return;
   }
   if (request.method === "GET" && url.pathname === "/api/kontur/callback") {
     void (async()=>{
-      const state=url.searchParams.get("state")||""; const expectedState=requestCookies(request).kontur_oauth_state||"";
+      const cookies=requestCookies(request);const state=url.searchParams.get("state")||""; const expectedState=cookies.kontur_oauth_state||"";const returnTo=cookies.kontur_return_to==="/control"?"/control":"/workspace";
       let receivedNewTokens=false;
       try {
         if(url.searchParams.get("error")) throw new Error(url.searchParams.get("error_description")||url.searchParams.get("error"));
@@ -226,8 +280,8 @@ const server = http.createServer((request, response) => {
         const tokens=await exchangeKonturToken({grant_type:"authorization_code",code,redirect_uri:konturConfig().redirectUri});
         receivedNewTokens=true;
         await verifyKonturBox(tokens.access_token);
-        response.writeHead(302,{Location:"/workspace?kontur=connected","Set-Cookie":konturStateCookie("",0),"Cache-Control":"no-store"}); response.end();
-      } catch(error){if(receivedNewTokens)try{fs.unlinkSync(konturTokenFile);}catch{}response.writeHead(302,{Location:"/workspace?kontur=error&message="+encodeURIComponent(error.message||"Ошибка авторизации"),"Set-Cookie":konturStateCookie("",0),"Cache-Control":"no-store"});response.end();}
+        response.writeHead(302,{Location:`${returnTo}?kontur=connected`,"Set-Cookie":[konturStateCookie("",0),konturReturnCookie("",0)],"Cache-Control":"no-store"}); response.end();
+      } catch(error){if(receivedNewTokens)try{fs.unlinkSync(konturTokenFile);}catch{}response.writeHead(302,{Location:`${returnTo}?kontur=error&message=${encodeURIComponent(error.message||"Ошибка авторизации")}`,"Set-Cookie":[konturStateCookie("",0),konturReturnCookie("",0)],"Cache-Control":"no-store"});response.end();}
     })(); return;
   }
   if (request.method === "POST" && url.pathname === "/api/kontur/draft") {
@@ -250,6 +304,9 @@ const server = http.createServer((request, response) => {
     const jobId=url.searchParams.get("jobId")||""; const job=konturDraftJobs.get(jobId);
     if(!job){response.writeHead(404,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({error:"Операция передачи не найдена. Возможно, сервер был перезапущен."}));return;}
     response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify(job));return;
+  }
+  if(request.method==="GET"&&url.pathname==="/api/kontur/signing-control"){
+    void(async()=>{try{const force=url.searchParams.get("refresh")==="1";if(force||!signingControlCache.value||signingControlCache.expiresAt<Date.now()){signingControlCache.value=await loadSigningControl();signingControlCache.expiresAt=Date.now()+5*60_000;}response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify(signingControlCache.value));}catch(error){const unauthorized=["Сначала подключите","Сеанс Контур","invalid_grant","Invalid auth token"].some(text=>error.message?.includes(text));response.writeHead(unauthorized?401:502,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify({error:unauthorized?"Сеанс Контур истёк. Выполните вход повторно":error.message||"Не удалось получить статусы документов из Контур"}));}})();return;
   }
   if (request.method === "GET" && url.pathname === "/api/tms-status") {
     const configured=Boolean((process.env.TMS_LOGIN&&process.env.TMS_PASSWORD)||fs.existsSync(credentialsFile));
