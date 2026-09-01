@@ -46,6 +46,10 @@ const driverFields = {
   TRADE_DRIVERS_DOC_NUMBER:"Номер водительского удостоверения", TRADE_DRIVERS_DOC_SERIAL:"Серия водительского удостоверения",
 };
 const driverDateFieldCandidates = [
+  "TRADE_DRIVERS_DOC_DATE",
+  "TRADE_DRIVERS_DATE_DOC",
+  "TRADE_DRIVERS_LICENSE_DATE",
+  "TRADE_DRIVERS_LICENSE_ISSUE_DATE",
   "TRADE_DRIVERS_DATE_END",
   "TRADE_DRIVERS_PROXY_DATE_END",
   "TRADE_DRIVERS_DATE_END_PROXY",
@@ -63,6 +67,15 @@ const warehouseFields = {
   ROLE_NAMES:"Роли", LIST_WAREHOUSE_NAME_ENG:"Название (англ)", ADDRESS_RUS:"Адрес на русском языке",
   ADDRESS_ENG:"Адрес на английском языке", PERSON_PHONE:"Номер телефона", UNLOCODE:"UN/LOCODE", ITN:"ИНН",
 };
+const warehousePostalCodeFieldCandidates = [
+  "POSTAL_CODE",
+  "POST_CODE",
+  "ZIP_CODE",
+  "ZIP",
+  "POST_INDEX",
+  "ADDRESS_INDEX",
+  "INDEX_ADDRESS",
+];
 
 const contractFieldCandidates = {
   "Дата договора": ["DATE_CONTRACT", "CONTRACT_DATE", "DATE_BEGIN"],
@@ -251,15 +264,31 @@ async function getAutoRows(session,filters,createdSince,onProgress){
 }
 
 async function getDriverRows(session,onProgress=()=>{}) {
-  let rowsWithoutDate = null;
+  let result = null;
+  let byId = null;
   for (const fieldName of driverDateFieldCandidates) {
     try {
       const rows = await getRows(session,"LIST_DRIVERS",{...driverFields,[fieldName]:"Дата окончания доверенности"},null,"",onProgress);
-      rowsWithoutDate ||= rows;
-      if (rows.some(row=>String(row["Дата окончания доверенности"]||"").trim())) return rows;
+      if (!result) {
+        result = rows;
+        byId = new Map(result.map(row=>[String(row["Номер записи"]||""),row]));
+      }
+      for (const row of rows) {
+        const value=String(row["Дата окончания доверенности"]||"").trim();
+        if(!value)continue;
+        const target=byId.get(String(row["Номер записи"]||""));
+        if(target&&!String(target["Дата окончания доверенности"]||"").trim())target["Дата окончания доверенности"]=value;
+      }
     } catch { /* Older TMS schemas may not expose this optional field. */ }
   }
-  return rowsWithoutDate || getRows(session,"LIST_DRIVERS",driverFields,null,"",onProgress);
+  return result || getRows(session,"LIST_DRIVERS",driverFields,null,"",onProgress);
+}
+
+async function getWarehouseRows(session,onProgress=()=>{}) {
+  const fields={...warehouseFields};
+  const postalField=await firstSupportedField(session,"LIST_WAREHOUSE",warehousePostalCodeFieldCandidates);
+  if(postalField)fields[postalField]="Индекс";
+  return getRows(session,"LIST_WAREHOUSE",fields,null,"",onProgress);
 }
 
 const cleanText=value=>String(value??"").replace(/\s+/g," ").trim();
@@ -329,7 +358,7 @@ export async function syncTms({ login: loginName, password, cacheDir, referenceD
     onStatus(key,"working","Получаем данные…");
     try {
       const progress=(count,message,progressValue)=>onStatus(key,"working",message,{count,progress:progressValue});
-      const rows=key==="drivers"?await getDriverRows(session,progress):key==="auto"?await getAutoRows(session,filter,minimumDate,progress):key==="contracts"?await getContractRows(session,progress):await getRows(session,table,fields,filter,minimumDate,progress);
+      const rows=key==="drivers"?await getDriverRows(session,progress):key==="points"?await getWarehouseRows(session,progress):key==="auto"?await getAutoRows(session,filter,minimumDate,progress):key==="contracts"?await getContractRows(session,progress):await getRows(session,table,fields,filter,minimumDate,progress);
       if(!rows.length) throw new Error("реестр пуст");
       const target=path.join(targetDir,filename);
       writeWorkbook(target,table,rows);
