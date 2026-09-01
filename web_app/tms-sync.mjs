@@ -78,12 +78,12 @@ const warehousePostalCodeFieldCandidates = [
 ];
 
 const contractFieldCandidates = {
-  "Дата договора": ["DATE_CONTRACT", "CONTRACT_DATE", "DATE_BEGIN"],
+  "Дата договора": ["DATE_CONTRACT", "CONTRACT_DATE", "DATE_BEGIN", "CONTRACT_BEGIN_DATE", "Дата договора"],
   "Срок действия до": ["DATE_END", "CONTRACT_DATE_END", "VALID_TO"],
-  "Организация 1": ["COMPANY1_NAME", "COMPANY_1_NAME", "LIST_COMPANY1_NAME", "LIST_COMPANY_NAME1", "FIRST_COMPANY_NAME"],
-  "Организация 2": ["COMPANY2_NAME", "COMPANY_2_NAME", "LIST_COMPANY2_NAME", "LIST_COMPANY_NAME2", "SECOND_COMPANY_NAME"],
+  "Организация 1": ["COMPANY1_NAME", "COMPANY_1_NAME", "COMPANY_NAME_1", "LIST_COMPANY1_NAME", "LIST_COMPANY_NAME1", "LIST_COMPANY_NAME_1", "FIRST_COMPANY_NAME", "FIRST_LIST_COMPANY_NAME", "Организация 1"],
+  "Организация 2": ["COMPANY2_NAME", "COMPANY_2_NAME", "COMPANY_NAME_2", "LIST_COMPANY2_NAME", "LIST_COMPANY_NAME2", "LIST_COMPANY_NAME_2", "SECOND_COMPANY_NAME", "SECOND_LIST_COMPANY_NAME", "Организация 2"],
   "Тип договора": ["TYPE_CONTRACT_NAME", "LIST_TYPE_CONTRACT_NAME", "CONTRACT_TYPE_NAME"],
-  "Номер договора": ["NUMBER_CONTRACT", "CONTRACT_NUMBER", "NUM_CONTRACT"],
+  "Номер договора": ["NUMBER_CONTRACT", "CONTRACT_NUMBER", "NUM_CONTRACT", "CONTRACT_NUM", "NUMBER", "Номер договора"],
   "Тип взаимоотношений": ["TYPE_RELATIONSHIP_NAME", "LIST_TYPE_RELATIONSHIP_NAME", "RELATIONSHIP_TYPE_NAME"],
   "Бессрочный": ["UNLIMITED", "IS_UNLIMITED", "PERPETUAL"],
   "Архивирование договора": ["ARCHIVE_CONTRACT", "CONTRACT_ARCHIVE", "IS_ARCHIVE"],
@@ -372,6 +372,9 @@ export async function syncTms({ login: loginName, password, cacheDir, referenceD
           let count=0;try{count=JSON.parse(fs.readFileSync(saved,"utf8").replace(/^\uFEFF/,"")).length;}catch{}
           counts.contracts=count;onStatus(key,"saved","Используется сохранённый справочник: "+count.toLocaleString("ru-RU")+" договоров. "+(error.message||""));return;
         }
+        counts.contracts=0;
+        onStatus(key,"saved","Реестр договоров временно недоступен. Остальные справочники обновлены; договоры можно загрузить отдельно.");
+        return;
       }
       onStatus(key,"error",error.message||"Ошибка");throw error;
     }
