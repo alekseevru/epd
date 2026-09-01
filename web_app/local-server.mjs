@@ -5,7 +5,8 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { syncTms } from "./tms-sync.mjs";
+import * as XLSX from "xlsx";
+import { syncTms, contractRowsToCatalog } from "./tms-sync.mjs";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const localEnvFile = path.join(root,"..",".env");
@@ -367,17 +368,24 @@ const server = http.createServer((request, response) => {
       try {
         const cache=cacheRoot; fs.mkdirSync(cache,{recursive:true}); fs.mkdirSync(referenceRoot,{recursive:true});
         const target=kind==="contracts"?path.join(referenceRoot,"contracts.json"):kind==="edo"?path.join(referenceRoot,"counteragents.csv"):path.join(cache,kind+".xlsx");
-        const incoming=Buffer.concat(chunks);
+        const incoming=Buffer.concat(chunks);let normalizedIncoming=incoming;
         if(kind==="contracts"){
-          const parsed=JSON.parse(incoming.toString("utf8").replace(/^\uFEFF/,""));
+          let parsed;
+          if(incoming[0]===0x50&&incoming[1]===0x4b){
+            const workbook=XLSX.read(incoming,{type:"buffer",cellDates:true});
+            const sheet=workbook.Sheets["LIST_CONTRACTS"]||workbook.Sheets[workbook.SheetNames[0]];
+            parsed=contractRowsToCatalog(XLSX.utils.sheet_to_json(sheet,{defval:"",raw:true}));
+            if(!parsed.length)throw new Error("В реестре LIST_CONTRACTS не найдены действующие договоры");
+            normalizedIncoming=Buffer.from(JSON.stringify(parsed,null,2)+"\n","utf8");
+          }else parsed=JSON.parse(incoming.toString("utf8").replace(/^\uFEFF/,""));
           if(!Array.isArray(parsed)||parsed.some(item=>!(item.client||item.carrier||item.counterparty)||!item.number)) throw new Error("Некорректный справочник договоров");
         }
         if(kind==="edo"){
           const header=incoming.toString("utf8").replace(/^\uFEFF/,"").split(/\r?\n/,1)[0]||"";
           for(const required of ["ИНН","КПП","Идентификатор участника ЭДО"]){if(!header.split(";").map(item=>item.replace(/^"|"$/g,"").trim()).includes(required))throw new Error(`В CSV отсутствует колонка «${required}»`);}
         }
-        const unchanged=fs.existsSync(target) && fs.readFileSync(target).equals(incoming);
-        if(!unchanged) fs.writeFileSync(target,incoming);
+        const unchanged=fs.existsSync(target) && fs.readFileSync(target).equals(normalizedIncoming);
+        if(!unchanged) fs.writeFileSync(target,normalizedIncoming);
         if((kind==="contracts"||kind==="edo")&&!unchanged) restartGeneratorWorker();
         response.writeHead(200,{"Content-Type":"application/json"}); response.end(JSON.stringify({ok:true,unchanged}));
       } catch(error){response.writeHead(400,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({error:error.message||"Не удалось сохранить справочник"}));}
