@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import styles from "./control.module.css";
 
 type ControlItem={
-  id:string;documentType:"ЭТрН"|"Заявка";number:string;container:string;client:string;carrier:string;consignee:string;
+  id:string;documentType:"ЭТрН"|"Заявка"|"Поручение экспедитору";workflowGroup:"signByUs"|"waitingCounterparty"|null;number:string;container:string;client:string;carrier:string;consignee:string;
   waitingTitle:string;responsible:string;status:"overdue"|"dueSoon"|"waiting";statusText:string;controlDate:string;controlDateLabel:string;
   overdueText:string;messageId:string;entityId:string;documentUrl:string|null;
 };
@@ -16,32 +16,45 @@ export default function ControlPage(){
   const [data,setData]=useState<ControlResponse|null>(null);
   const [loading,setLoading]=useState(true);
   const [error,setError]=useState("");
-  const [filter,setFilter]=useState<"all"|"overdue"|"etrn"|"order">("all");
+  const [filter,setFilter]=useState<"all"|"overdue"|"etrn"|"order"|"forwarding">("all");
   const [query,setQuery]=useState("");
   const load=async(force=false)=>{setLoading(true);setError("");try{const response=await fetch(`/api/kontur/signing-control${force?"?refresh=1":""}`,{cache:"no-store"});const result=await response.json();if(!response.ok)throw new Error(result.error||"Не удалось получить статусы документов");setData(result);}catch(value){setData(null);setError(value instanceof Error?value.message:"Не удалось получить статусы документов");}finally{setLoading(false);}};
   useEffect(()=>{void load();},[]);
-  const items=useMemo(()=>{const search=query.trim().toLocaleLowerCase("ru-RU");return data?.items.filter(item=>filter==="all"||filter==="overdue"&&item.status==="overdue"||filter==="etrn"&&item.documentType==="ЭТрН"||filter==="order"&&item.documentType==="Заявка").filter(item=>!search||[item.container,item.client,item.consignee,item.carrier].some(value=>value.toLocaleLowerCase("ru-RU").includes(search)))||[];},[data,filter,query]);
+  const items=useMemo(()=>{const search=query.trim().toLocaleLowerCase("ru-RU");return data?.items.filter(item=>filter==="all"||filter==="overdue"&&item.status==="overdue"||filter==="etrn"&&item.documentType==="ЭТрН"||filter==="order"&&item.documentType==="Заявка"||filter==="forwarding"&&item.documentType==="Поручение экспедитору").filter(item=>!search||[item.number,item.container,item.client,item.consignee,item.carrier].some(value=>value.toLocaleLowerCase("ru-RU").includes(search)))||[];},[data,filter,query]);
   const overdue=data?.items.filter(item=>item.status==="overdue").length||0;
   const etrn=data?.items.filter(item=>item.documentType==="ЭТрН").length||0;
   const orders=data?.items.filter(item=>item.documentType==="Заявка").length||0;
+  const forwarding=data?.items.filter(item=>item.documentType==="Поручение экспедитору")||[];
+  const signByUs=forwarding.filter(item=>item.workflowGroup==="signByUs").length;
+  const waitingCounterparty=forwarding.filter(item=>item.workflowGroup==="waitingCounterparty").length;
+  const regularItems=items.filter(item=>item.documentType!=="Поручение экспедитору");
+  const forwardingItems=items.filter(item=>item.documentType==="Поручение экспедитору");
   return <main className={styles.shell}>
     <header className={styles.topbar}><div className={styles.logo}>А</div><div><strong>Создание ЭПД</strong><span>локальная версия</span></div><nav><a href="/workspace">Создание документов</a><a className={styles.activeTab} href="/control">Контроль подписания</a></nav><i/><b>{data?.connected?"Контур подключён":"Предварительный режим"}</b></header>
     <section className={styles.content}>
-      <header className={styles.heading}><div><small>КОНТРОЛЬ ДОКУМЕНТООБОРОТА</small><h1>Неподписанные ЭТрН и заявки</h1><p>Документы, по которым ожидается следующий титул или подпись участника перевозки.</p></div><button onClick={()=>load(true)} disabled={loading}>{loading?"Проверяем…":"Обновить статусы"}</button></header>
+      <header className={styles.heading}><div><small>КОНТРОЛЬ ДОКУМЕНТООБОРОТА</small><h1>Неподписанные перевозочные документы</h1><p>ЭТрН, заявки и поручения экспедитору, по которым ожидается следующий титул или подпись.</p></div><button onClick={()=>load(true)} disabled={loading}>{loading?"Проверяем…":"Обновить статусы"}</button></header>
       {error&&<div className={styles.error}><span>{error}</span>{error.includes("Контур")&&<a style={{marginLeft:"auto",color:"#295d72",fontWeight:800}} href="/api/kontur/login?returnTo=/control">Войти через Контур</a>}</div>}
       <section className={styles.metrics}>
         <button className={filter==="all"?styles.selected:""} onClick={()=>setFilter("all")}><span>Всего в контроле</span><strong>{data?.items.length||0}</strong><small>незавершённых документов</small></button>
         <button className={filter==="overdue"?styles.selected:""} onClick={()=>setFilter("overdue")}><span>Просрочено</span><strong>{overdue}</strong><small>требуют внимания</small></button>
         <button className={filter==="etrn"?styles.selected:""} onClick={()=>setFilter("etrn")}><span>ЭТрН</span><strong>{etrn}</strong><small>ожидают титулы</small></button>
         <button className={filter==="order"?styles.selected:""} onClick={()=>setFilter("order")}><span>Заявки</span><strong>{orders}</strong><small>ожидают подпись</small></button>
+        <button className={filter==="forwarding"?styles.selected:""} onClick={()=>setFilter("forwarding")}><span>Поручения</span><strong>{forwarding.length}</strong><small>{signByUs} нам · {waitingCounterparty} контрагенту</small></button>
       </section>
       <section className={styles.panel}>
         <div className={styles.panelTitle}><div><strong>Документы в работе</strong><small>{data?`Проверено ${formatDate(data.generatedAt)}`:"Получаем данные…"}</small></div><label style={{position:"relative",width:"min(390px, 100%)",display:"flex",flexDirection:"column",gap:4}}><span style={{color:"#718087",fontSize:10,fontWeight:800}}>Поиск</span><input style={{width:"100%",height:40,padding:"0 40px 0 12px",border:"1px solid #295d7240",borderRadius:10,background:"#fff",color:"#152631",font:"inherit"}} value={query} onChange={event=>setQuery(event.target.value)} placeholder="Контейнер, клиент или перевозчик"/>{query&&<button style={{position:"absolute",right:5,bottom:5,width:30,height:30,border:0,borderRadius:8,background:"#eef2f3",color:"#295d72",fontSize:18,cursor:"pointer"}} onClick={()=>setQuery("")} aria-label="Очистить поиск">×</button>}</label><span>{data?.user?.name?`Авторизация: ${data.user.name}`:"Контур не авторизован"}</span></div>
         <div className={styles.tableWrap}><table><thead><tr><th>Документ</th><th>Контейнер</th><th>Заказчик (клиент)</th><th>Грузополучатель</th><th>Перевозчик</th><th style={{whiteSpace:"nowrap",minWidth:100}}>Ожидается</th><th>Контрольная дата</th><th>Статус</th><th>Документ</th></tr></thead><tbody>
-          {!loading&&items.map(item=><tr key={item.id}><td><b>{item.documentType}</b><strong>{item.number}</strong><small>{item.messageId}</small></td><td><strong>{item.container}</strong></td><td>{item.client}</td><td>{item.consignee}</td><td>{item.carrier}</td><td><b className={styles.titleBadge}>{item.waitingTitle}</b></td><td><strong>{formatDate(item.controlDate)}</strong><small>{item.controlDateLabel}</small></td><td><span className={styles[item.status]}><b>{item.overdueText}</b><small>{item.statusText}</small></span></td><td>{item.documentUrl?<a href={item.documentUrl} target="_blank" rel="noreferrer">Открыть в Контуре ↗</a>:<button disabled title="Нужен шаблон URL карточки документа из вашего ЛК">Нужен URL из ЛК</button>}</td></tr>)}
-          {!loading&&!items.length&&<tr><td colSpan={8} className={styles.empty}>По выбранному фильтру документов нет</td></tr>}
+          {!loading&&regularItems.map(item=><tr key={item.id}><td><b>{item.documentType}</b><strong>{item.number}</strong><small>{item.messageId}</small></td><td><strong>{item.container}</strong></td><td>{item.client}</td><td>{item.consignee}</td><td>{item.carrier}</td><td><b className={styles.titleBadge}>{item.waitingTitle}</b></td><td><strong>{formatDate(item.controlDate)}</strong><small>{item.controlDateLabel}</small></td><td><span className={styles[item.status]}><b>{item.overdueText}</b><small>{item.statusText}</small></span></td><td>{item.documentUrl?<a href={item.documentUrl} target="_blank" rel="noreferrer">Открыть в Контуре ↗</a>:<button disabled title="Нужен шаблон URL карточки документа из вашего ЛК">Нужен URL из ЛК</button>}</td></tr>)}
+          {!loading&&!regularItems.length&&<tr><td colSpan={9} className={styles.empty}>По выбранному фильтру документов нет</td></tr>}
         </tbody></table></div>
       </section>
+      {(filter==="all"||filter==="overdue"||filter==="forwarding")&&<section className={styles.panel} style={{marginTop:18}}>
+        <div className={styles.panelTitle}><div><strong>Поручения экспедитору</strong><small>Подписать нам: {signByUs} · отправлены и ожидают подписи: {waitingCounterparty}</small></div></div>
+        <div className={styles.tableWrap}><table><thead><tr><th>Поручение</th><th>Контейнер</th><th>Заказчик</th><th>Экспедитор</th><th>Очередь</th><th>Ожидается</th><th>Контрольная дата</th><th>Статус</th><th>Документ</th></tr></thead><tbody>
+          {!loading&&forwardingItems.map(item=><tr key={item.id}><td><b>{item.documentType}</b><strong>{item.number}</strong><small>{item.messageId}</small></td><td><strong>{item.container}</strong></td><td>{item.client}</td><td>{item.carrier}</td><td><b className={styles.titleBadge}>{item.workflowGroup==="signByUs"?"Подписать нам":"Ждём контрагента"}</b></td><td><b className={styles.titleBadge}>{item.waitingTitle}</b></td><td><strong>{formatDate(item.controlDate)}</strong><small>{item.controlDateLabel}</small></td><td><span className={styles[item.status]}><b>{item.overdueText}</b><small>{item.statusText}</small></span></td><td>{item.documentUrl?<a href={item.documentUrl} target="_blank" rel="noreferrer">Открыть в Контуре ↗</a>:<button disabled>Ссылка недоступна</button>}</td></tr>)}
+          {!loading&&!forwardingItems.length&&<tr><td colSpan={9} className={styles.empty}>Неподписанных поручений в этой группе нет</td></tr>}
+        </tbody></table></div>
+      </section>}
     </section>
   </main>;
 }

@@ -372,6 +372,9 @@ export async function syncTms({ login: loginName, password, cacheDir, referenceD
           let count=0;try{count=JSON.parse(fs.readFileSync(saved,"utf8").replace(/^\uFEFF/,"")).length;}catch{}
           counts.contracts=count;onStatus(key,"saved","Используется сохранённый справочник: "+count.toLocaleString("ru-RU")+" договоров. "+(error.message||""));return;
         }
+        counts.contracts=0;
+        onStatus(key,"saved","Реестр договоров временно недоступен. Остальные справочники обновлены; договоры можно загрузить отдельно.");
+        return;
       }
       onStatus(key,"error",error.message||"Ошибка");throw error;
     }
