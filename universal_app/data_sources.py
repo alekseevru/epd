@@ -19,6 +19,9 @@ def clean(value) -> str:
 
 def normalize_name(value) -> str:
     text = clean(value).upper().replace("Ё", "Е")
+    text = re.sub(r"\bН\.?\s*НОВГОРОД\b", "НИЖНИЙ НОВГОРОД", text)
+    text = re.sub(r"\bРОСШИНЫ\b", "РОСШИНА", text)
+    text = re.sub(r"\(\s*СКЛАД\s*\)", "", text)
     text = re.sub(r"[«»\"'`]", "", text)
     text = re.sub(r"\b(ООО|АО|ПАО|ЗАО|ИП|ОБЩЕСТВО С ОГРАНИЧЕННОЙ ОТВЕТСТВЕННОСТЬЮ)\b", "", text)
     return re.sub(r"[^A-ZА-Я0-9]+", "", text)

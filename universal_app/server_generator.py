@@ -40,6 +40,10 @@ class Generator(BaseGenerator):
     def warnings(ctx, empty=False, ezz=False):
         warnings = []
         if not ezz:
+            if not ctx.get("client", {}).get("phone"):
+                warnings.append("В справочнике организаций не заполнен телефон заказчика.")
+            if not empty and not ctx.get("consignee", {}).get("phone"):
+                warnings.append("В справочнике организаций не заполнен телефон грузополучателя.")
             missing_driver = []
             if not ctx.get("driver_name"):
                 missing_driver.append("ФИО")
@@ -61,6 +65,8 @@ class Generator(BaseGenerator):
                 warnings.append("Полный адрес погрузки не найден в справочнике точек маршрута.")
             if not (ctx.get("consignee") if empty else ctx.get("loading_owner")).get("inn"):
                 warnings.append("В справочнике точек маршрута не найден владелец объекта пункта погрузки.")
+            if not (ctx.get("consignee") if empty else ctx.get("loading_owner")).get("phone"):
+                warnings.append("Для владельца объекта пункта погрузки не заполнен телефон в справочнике.")
             if not empty and not ctx.get("delivery_point_found"):
                 warnings.append("Полный адрес доставки не найден в справочнике точек маршрута.")
         return warnings

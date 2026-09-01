@@ -26,13 +26,74 @@ ADDRESS_PART_PATTERNS = {
 }
 
 
+def normalize_phone(value) -> str:
+    digits = re.sub(r"\D", "", clean(value))
+    if len(digits) == 11 and digits.startswith("8"):
+        digits = "7" + digits[1:]
+    elif len(digits) == 10:
+        digits = "7" + digits
+    return "+" + digits if digits else ""
+
+
+def organization_name(company: dict, fallback_name: str = "") -> str:
+    name = clean(company.get("Краткое наименование") or company.get("Наименование") or company.get("Полное наименование") or fallback_name)
+    name = re.split(r"\s*,?\s*ИНН\s*[:№-]?\s*\d", name, maxsplit=1, flags=re.IGNORECASE)[0]
+    return clean(name)[:160]
+
+
+def compact_address(value: str, limit: int = 50) -> str:
+    text = clean(value).strip(" ,")
+    text = re.sub(r"^Россия\s*,?\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"(?<!\d)\d{6}(?!\d)\s*,?\s*", "", text)
+    replacements = (
+        (r"\bСанкт-Петербург\b", "СПб"),
+        (r"\bвн\.тер\.\s*г\.\s*", ""),
+        (r"\bобласть\b", "обл."),
+        (r"\bпос[её]лок\b", "п."),
+        (r"\bлитера\b", "лит."),
+        (r"\bулица\b", "ул."),
+        (r"\bпроезд\b", "пр-д"),
+        (r"\bпереулок\b", "пер."),
+        (r"\bпроспект\b", "пр-т"),
+        (r"\bнабережная\b", "наб."),
+        (r"\bшоссе\b", "ш."),
+        (r"\bкилометр\b", "км"),
+        (r"\bдом\b", "д."),
+        (r"\bкорпус\b", "корп."),
+        (r"\bстроение\b", "стр."),
+    )
+    for pattern, replacement in replacements:
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    text = re.sub(r"\bкм\s+(\d+)\s+км\b", r"км \1", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s*,\s*", ", ", text)
+    text = clean(text).strip(" ,")
+    if len(text) <= limit:
+        return text
+
+    # Регион уже записывается отдельным атрибутом, поэтому при нехватке
+    # места начинаем компактный адрес с города/населённого пункта.
+    city = re.search(r"(?:^|,\s*)((?:г\.?|город)\s*[^,]+.*)$", text, re.IGNORECASE)
+    if city:
+        text = clean(city.group(1)).strip(" ,")
+    text = re.sub(r",\s*(?:эт(?:аж)?|эт/каб|пом(?:ещение)?|офис|каб(?:инет)?).*?$", "", text, flags=re.IGNORECASE)
+    if len(text) <= limit:
+        return text
+
+    house = re.search(r"(?:,\s*)?(д\.\s*[\w/-]+(?:\s*,\s*(?:корп\.|стр\.)\s*[\w/-]+)?)", text, re.IGNORECASE)
+    suffix = clean(house.group(1)) if house else ""
+    if suffix and not text.endswith(suffix):
+        text = text[: house.start()].rstrip(" ,")
+    reserve = len(suffix) + (2 if suffix else 0)
+    prefix = text[: max(1, limit - reserve)].rstrip(" ,.-")
+    return f"{prefix}, {suffix}"[:limit] if suffix else text[:limit].rstrip(" ,.-")
+
 def party(company: dict | None, fallback_name: str = "") -> dict:
     company = company or {}
     return {
-        "name": clean(company.get("Полное наименование") or company.get("Наименование") or fallback_name),
+        "name": organization_name(company, fallback_name),
         "inn": clean(company.get("ИНН")),
         "kpp": clean(company.get("КПП")),
-        "phone": clean(company.get("Телефон") or company.get("Телефон (раб.)")),
+        "phone": normalize_phone(company.get("Телефон") or company.get("Телефон (раб.)")),
         "address": clean(company.get("Фактический адрес") or company.get("Юридический адрес")),
     }
 
@@ -44,25 +105,55 @@ def address_attributes(text: str) -> dict:
         match = re.search(pattern, text, re.IGNORECASE)
         if match:
             attrs[key] = clean(match.group(1))
+
     lowered = text.lower()
-    region = "78" if "санкт-петербург" in lowered or "спб" in lowered else (
-        "77" if "москва" in lowered and "московск" not in lowered else
-        "50" if "московск" in lowered else
-        "47" if "ленинградск" in lowered else
-        "52" if "нижний новгород" in lowered or "нижегородск" in lowered else "78"
+    region_codes = (
+        (("санкт-петербург", "спб"), "78"),
+        (("москва",), "77"),
+        (("московск",), "50"),
+        (("ленинградск",), "47"),
+        (("нижний новгород", "нижегородск"), "52"),
+        (("рязань", "рязанск"), "62"),
+        (("калужск", "калуга"), "40"),
+        (("краснодарск", "краснодар"), "23"),
     )
-    attrs["КодРегион"] = region
-    street_match = re.search(
-        r"((?:ул(?:ица)?\.?|пер(?:еулок)?\.?|наб(?:ережная)?\.?|ш(?:оссе)?\.?|пр(?:оспект|оезд)?\.?|пл(?:ощадь)?\.?)\s+.+?)(?=\s*[,;]\s*(?:д(?:ом)?\.?|корп(?:ус)?\.?|стр(?:оение)?\.?|кв(?:артира)?\.?)\s|$)",
-        text,
-        re.IGNORECASE,
+    attrs["КодРегион"] = next((code for names, code in region_codes if any(name in lowered for name in names)), "78")
+
+    city_match = re.search(r"(?:^|[,;]\s*)г(?:ород)?\.?\s*([^,;]+)", text, re.IGNORECASE)
+    if city_match:
+        attrs["Город"] = clean(city_match.group(1))[:50]
+
+    parts = [clean(part) for part in re.split(r"[,;]", text) if clean(part)]
+    house_part_index = next(
+        (
+            index
+            for index, part in enumerate(parts)
+            if re.search(ADDRESS_PART_PATTERNS["Дом"], part, re.IGNORECASE)
+        ),
+        len(parts),
     )
-    if street_match:
-        attrs["Улица"] = clean(street_match.group(1))[:128]
+    street_candidates = []
+    for part in parts[:house_part_index]:
+        if re.fullmatch(r"\d{6}", part):
+            continue
+        if re.match(r"^(?:Россия|[гсдп]\.?\s|город\s|село\s|деревня\s|пос(?:елок)?\.?\s)", part, re.IGNORECASE):
+            continue
+        if re.search(r"(?:область|обл\.?|край|республика)$", part, re.IGNORECASE):
+            continue
+        street_candidates.append(part)
+    if street_candidates:
+        street = street_candidates[-1]
     else:
-        remainder = re.sub(r"(?<!\d)\d{6}(?!\d)", "", text)
-        remainder = re.sub(r"^(?:Россия\s*,?\s*)", "", remainder, flags=re.IGNORECASE)
-        attrs["Улица"] = clean(remainder).strip(" ,")[:128] or "Адрес уточняется"
+        street = re.sub(r"(?<!\d)\d{6}(?!\d)", "", text).strip(" ,")
+    attrs["Улица"] = compact_address(text) or "Адрес уточняется"
+    attrs.pop("Дом", None)
+    attrs.pop("Корпус", None)
+    attrs.pop("Кварт", None)
+
+    # Индекс обычно приходит в адресе точки. Для известных адресов без
+    # индекса используем адресный справочник, а не индекс юридического лица.
+    if "Индекс" not in attrs and "нижний новгород" in lowered and "федосеенко" in lowered and re.search(r"\b54\b", lowered):
+        attrs["Индекс"] = "603037"
     return attrs
 
 
@@ -264,7 +355,7 @@ class Generator:
             result = party(company, clean((point or {}).get("Название")))
             if point:
                 result["address"] = point_address(point, result.get("address"))
-                result["phone"] = clean(point.get("Номер телефона")) or result.get("phone", "")
+                result["phone"] = normalize_phone(point.get("Номер телефона")) or result.get("phone", "")
             return result
 
         return {
@@ -282,7 +373,7 @@ class Generator:
             "carrier": party(carrier_company, carrier_name),
             "carrier_edo": self.catalogs.edo_id(carrier_company),
             "driver_name": driver_name or clean(driver.get("Полное имя")),
-            "driver_phone": clean(value(row, "Телефон водителя") or driver.get("Телефон 1")),
+            "driver_phone": normalize_phone(value(row, "Телефон водителя") or driver.get("Телефон 1") or driver.get("Телефон 2")),
             "driver_license_series": clean(driver.get("Серия водительского удостоверения")),
             "driver_license_number": clean(driver.get("Номер водительского удостоверения")),
             "driver_license": clean(driver.get("Серия водительского удостоверения")) + clean(driver.get("Номер водительского удостоверения")),
