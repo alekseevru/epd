@@ -97,9 +97,9 @@ def refresh_sources():
     auto_index = {}
     supplemental_fields = (
         "Водитель", "ФИО водителя", "Телефон водителя",
-        "Номер автомашины", "Транспортное средство", "Номер прицепа",
+        "Номер автомашины", "Транспортное средство", "Номер прицепа", "Грузополучатель",
     )
-    for row in read_xlsx(auto_file, "OPERATION_SUB_DOC"):
+    for row in read_source(auto_source, auto_file, "OPERATION_SUB_DOC"):
         import re
         match = re.search(r"[A-ZА-Я]{4}\d{7}", clean(row.get("Номера грузовых единиц")).upper())
         if not match:

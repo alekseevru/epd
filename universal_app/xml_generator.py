@@ -18,6 +18,12 @@ TAGLEX = {
     "edo": "2BM-7734515704-771001001-201411210937449434253",
 }
 
+KNOWN_PARTY_PHONES = {
+    "7734515704": "+74957750739",  # ТАГЛЕКС
+    "5047295775": "+79255030287",  # АГРЛ
+    "7817137260": "+79255030287",  # АГМ
+}
+
 ADDRESS_PART_PATTERNS = {
     "Индекс": r"(?<!\d)(\d{6})(?!\d)",
     "Дом": r"(?:^|[,;]\s*|\s)(?:д(?:ом)?\.?)(?!\w)\s*([\w/-]+)",
@@ -93,7 +99,7 @@ def party(company: dict | None, fallback_name: str = "") -> dict:
         "name": organization_name(company, fallback_name),
         "inn": clean(company.get("ИНН")),
         "kpp": clean(company.get("КПП")),
-        "phone": normalize_phone(company.get("Телефон") or company.get("Телефон (раб.)")),
+        "phone": normalize_phone(company.get("Телефон") or company.get("Телефон (раб.)")) or KNOWN_PARTY_PHONES.get(clean(company.get("ИНН")), ""),
         "address": clean(company.get("Фактический адрес") or company.get("Юридический адрес")),
     }
 
