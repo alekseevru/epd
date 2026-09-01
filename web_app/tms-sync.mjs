@@ -53,6 +53,18 @@ const warehouseFields = {
   ADDRESS_ENG:"Адрес на английском языке", PERSON_PHONE:"Номер телефона", UNLOCODE:"UN/LOCODE", ITN:"ИНН",
 };
 
+const contractFieldCandidates = {
+  "Дата договора": ["DATE_CONTRACT", "CONTRACT_DATE", "DATE_BEGIN"],
+  "Срок действия до": ["DATE_END", "CONTRACT_DATE_END", "VALID_TO"],
+  "Организация 1": ["COMPANY1_NAME", "COMPANY_1_NAME", "LIST_COMPANY1_NAME", "LIST_COMPANY_NAME1", "FIRST_COMPANY_NAME"],
+  "Организация 2": ["COMPANY2_NAME", "COMPANY_2_NAME", "LIST_COMPANY2_NAME", "LIST_COMPANY_NAME2", "SECOND_COMPANY_NAME"],
+  "Тип договора": ["TYPE_CONTRACT_NAME", "LIST_TYPE_CONTRACT_NAME", "CONTRACT_TYPE_NAME"],
+  "Номер договора": ["NUMBER_CONTRACT", "CONTRACT_NUMBER", "NUM_CONTRACT"],
+  "Тип взаимоотношений": ["TYPE_RELATIONSHIP_NAME", "LIST_TYPE_RELATIONSHIP_NAME", "RELATIONSHIP_TYPE_NAME"],
+  "Бессрочный": ["UNLIMITED", "IS_UNLIMITED", "PERPETUAL"],
+  "Архивирование договора": ["ARCHIVE_CONTRACT", "CONTRACT_ARCHIVE", "IS_ARCHIVE"],
+};
+
 const autoFields = {
   ID: "Номер записи",
   CREATE_DATE: "Дата создания строки",
@@ -186,6 +198,23 @@ async function supportsField(session,table,fieldName){
   if(!response.ok)return false;const json=await response.json().catch(()=>({}));return json?.result?.status==="success"&&Array.isArray(json?.result?.rows);
 }
 
+async function firstSupportedField(session,table,candidates){
+  for(const fieldName of candidates){if(await supportsField(session,table,fieldName))return fieldName;}
+  return "";
+}
+
+async function getContractRows(session,onProgress){
+  const fields={ID:"Номер записи"};
+  for(const [label,candidates] of Object.entries(contractFieldCandidates)){
+    const fieldName=await firstSupportedField(session,"LIST_CONTRACTS",candidates);
+    if(fieldName)fields[fieldName]=label;
+  }
+  for(const required of ["Организация 1","Организация 2","Номер договора"]){
+    if(!Object.values(fields).includes(required))throw new Error("TMS не предоставила поле «"+required+"» реестра договоров");
+  }
+  return getRows(session,"LIST_CONTRACTS",fields,null,"",onProgress);
+}
+
 async function getAutoRows(session,filters,createdSince,onProgress){
   const supported=[];
   for(const fieldName of autoConsigneeFieldCandidates){
@@ -212,6 +241,38 @@ async function getDriverRows(session,onProgress=()=>{}) {
     } catch { /* Older TMS schemas may not expose this optional field. */ }
   }
   return rowsWithoutDate || getRows(session,"LIST_DRIVERS",driverFields,null,"",onProgress);
+}
+
+const cleanText=value=>String(value??"").replace(/\s+/g," ").trim();
+const normalizedName=value=>cleanText(value).toLocaleUpperCase("ru-RU").replace(/[«»"'\x60]/g,"").replace(/\b(?:ООО|АО|ПАО|ЗАО|ИП|ОБЩЕСТВО С ОГРАНИЧЕННОЙ ОТВЕТСТВЕННОСТЬЮ)\b/g,"").replace(/[^A-ZА-Я0-9]+/g,"");
+const compactDate=value=>{if(value instanceof Date&&!Number.isNaN(value.getTime()))return value.toISOString().slice(0,10);const text=cleanText(value);const match=text.match(/^(\d{4})-(\d{2})-(\d{2})/);if(match)return [match[1],match[2],match[3]].join("-");const russian=text.match(/^(\d{1,2})[.](\d{1,2})[.](\d{4})/);if(russian)return [russian[3],russian[2].padStart(2,"0"),russian[1].padStart(2,"0")].join("-");const slash=text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})/);if(slash){const year=slash[3].length===2?"20"+slash[3]:slash[3];return [year,slash[1].padStart(2,"0"),slash[2].padStart(2,"0")].join("-");}return "";};
+const truthy=value=>["1","true","да","yes"].includes(cleanText(value).toLowerCase());
+
+export function contractRowsToCatalog(rows){
+  const taglex=normalizedName("ООО ТАГЛЕКС");
+  const today=new Date().toISOString().slice(0,10);
+  return rows.flatMap(row=>{
+    const number=cleanText(row["Номер договора"]),organization1=cleanText(row["Организация 1"]),organization2=cleanText(row["Организация 2"]);
+    if(!number||!organization1||!organization2||truthy(row["Архивирование договора"]))return [];
+    const endDate=compactDate(row["Срок действия до"]);
+    if(endDate&&!truthy(row["Бессрочный"])&&endDate<today)return [];
+    const firstIsTaglex=normalizedName(organization1)===taglex,secondIsTaglex=normalizedName(organization2)===taglex;
+    const counterparty=firstIsTaglex?organization2:secondIsTaglex?organization1:organization1;
+    const relationship=cleanText(row["Тип взаимоотношений"]).toLowerCase(),type=cleanText(row["Тип договора"]);
+    const carrier=/подряд|поставщ|перевоз/.test(relationship+" "+type.toLowerCase())||(!relationship&&!firstIsTaglex);
+    return [{[carrier?"carrier":"client"]:counterparty,aliases:[counterparty],number,date:compactDate(row["Дата договора"]),title:type||"Договор"}];
+  });
+}
+
+function writeContractCatalog(target,rows){
+  let existing=[];try{existing=JSON.parse(fs.readFileSync(target,"utf8").replace(/^\uFEFF/,""));}catch{}
+  const merged=new Map();
+  for(const item of [...existing,...contractRowsToCatalog(rows)]){
+    const party=item.carrier||item.client||item.counterparty||"";
+    const key=(item.carrier?"carrier":"client")+"|"+normalizedName(party)+"|"+cleanText(item.number).toUpperCase();
+    if(party&&item.number)merged.set(key,item);
+  }
+  fs.writeFileSync(target,JSON.stringify([...merged.values()],null,2)+"\n");
 }
 
 function writeWorkbook(target, sheetName, rows) {
@@ -242,19 +303,30 @@ export async function syncTms({ login: loginName, password, cacheDir, referenceD
     ["vehicles","LIST_AUTO",vehicleFields,null,referenceDir,"vehicles.xlsx",""],
     ["drivers","LIST_DRIVERS",driverFields,null,referenceDir,"drivers.xlsx",""],
     ["points","LIST_WAREHOUSE",warehouseFields,null,referenceDir,"route-points.xlsx",""],
+    ["contracts","LIST_CONTRACTS",null,null,referenceDir,"contracts.xlsx",""],
   ];
   const counts = {};
   const runTask = async ([key,table,fields,filter,targetDir,filename,minimumDate]) => {
     onStatus(key,"working","Получаем данные…");
     try {
       const progress=(count,message,progressValue)=>onStatus(key,"working",message,{count,progress:progressValue});
-      const rows=key==="drivers"?await getDriverRows(session,progress):key==="auto"?await getAutoRows(session,filter,minimumDate,progress):await getRows(session,table,fields,filter,minimumDate,progress);
+      const rows=key==="drivers"?await getDriverRows(session,progress):key==="auto"?await getAutoRows(session,filter,minimumDate,progress):key==="contracts"?await getContractRows(session,progress):await getRows(session,table,fields,filter,minimumDate,progress);
       if(!rows.length) throw new Error("реестр пуст");
       const target=path.join(targetDir,filename);
       writeWorkbook(target,table,rows);
-      writeGeneratorCache(target.replace(/\.xlsx$/i,".json"),rows);
+      if(key==="contracts")writeContractCatalog(path.join(referenceDir,"contracts.json"),rows);
+      else writeGeneratorCache(target.replace(/\.xlsx$/i,".json"),rows);
       counts[key]=rows.length; onStatus(key,"saved",rows.length.toLocaleString("ru-RU")+" строк");
-    } catch(error) { onStatus(key,"error",error.message||"Ошибка"); throw error; }
+    } catch(error) {
+      if(key==="contracts"){
+        const saved=path.join(referenceDir,"contracts.json");
+        if(fs.existsSync(saved)){
+          let count=0;try{count=JSON.parse(fs.readFileSync(saved,"utf8").replace(/^\uFEFF/,"")).length;}catch{}
+          counts.contracts=count;onStatus(key,"saved","Используется сохранённый справочник: "+count.toLocaleString("ru-RU")+" договоров. "+(error.message||""));return;
+        }
+      }
+      onStatus(key,"error",error.message||"Ошибка");throw error;
+    }
   };
   // The two transport registries are the heaviest TMS queries. Run them one
   // after another to avoid temporary 503 responses from the shared server.
