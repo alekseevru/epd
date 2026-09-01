@@ -40,7 +40,37 @@ catalogs = load_catalogs()
 generator = Generator(ROOT / "resources", catalogs)
 cache_dir = ROOT.parent / "web_app" / "work" / "source-cache"
 source_stamp = None
+catalog_stamp = None
 cargo_index, auto_index = {}, {}
+
+
+def current_catalog_stamp():
+    configured = (
+        os.getenv("AGR_COMPANIES_FILE", ""),
+        os.getenv("AGR_EDO_FILE", ""),
+        os.getenv("AGR_VEHICLES_FILE", ""),
+        os.getenv("AGR_DRIVERS_FILE", ""),
+        os.getenv("AGR_POINTS_FILE", ""),
+        os.getenv("AGR_CONTRACTS_FILE", ""),
+    )
+    paths = []
+    for value in configured:
+        if not value:
+            continue
+        path = Path(value)
+        json_path = path.with_suffix(".json")
+        paths.append(json_path if json_path.exists() else path)
+    return tuple((str(path), path.stat().st_mtime_ns if path.exists() else 0) for path in paths)
+
+
+def refresh_catalogs():
+    global catalogs, generator, catalog_stamp
+    stamp = current_catalog_stamp()
+    if stamp == catalog_stamp:
+        return
+    catalogs = load_catalogs()
+    generator = Generator(ROOT / "resources", catalogs)
+    catalog_stamp = stamp
 
 
 def refresh_sources():
@@ -89,6 +119,7 @@ def refresh_sources():
 
 
 def handle(request):
+    refresh_catalogs()
     refresh_sources()
     container = request["container"]
     cargo, auto = cargo_index.get(container), auto_index.get(container)

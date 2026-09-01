@@ -159,10 +159,51 @@ class Catalogs:
                 return unique_ids[0]
         return ""
 
-    def driver(self, full_name: str) -> dict | None:
+    def driver(self, full_name: str, carrier_name: str = "") -> dict | None:
         key = normalize_name(full_name)
-        matches = [row for row in self.drivers if normalize_name(row.get("Полное имя")) == key]
-        return matches[0] if len(matches) == 1 else None
+
+        def fio_key(value):
+            return tuple(sorted(filter(None, re.split(r"[^A-ZА-Я0-9]+", clean(value).upper().replace("Ё", "Е")))))
+
+        requested_fio = fio_key(full_name)
+        matches = []
+        for row in self.drivers:
+            first_name = clean(row.get("Полное имя"))
+            candidates = (
+                row.get("Полное имя"),
+                row.get("Имя"),
+                " ".join(filter(None, [row.get("Фамилия"), first_name, row.get("Отчество")])),
+            )
+            if any(normalize_name(candidate) == key or fio_key(candidate) == requested_fio for candidate in candidates if clean(candidate)):
+                matches.append(row)
+        if not matches:
+            return None
+        if len(matches) == 1:
+            return matches[0]
+
+        carrier_key = normalize_name(carrier_name)
+        carrier_matches = [
+            row for row in matches
+            if carrier_key and normalize_name(row.get("Автоперевозчик")) == carrier_key
+        ]
+        if not carrier_matches:
+            return None
+
+        def rank(row):
+            completeness = sum(bool(clean(row.get(field))) for field in (
+                "Серия водительского удостоверения",
+                "Номер водительского удостоверения",
+                "Дата окончания доверенности",
+                "Телефон 1",
+                "Телефон 2",
+            ))
+            try:
+                record_number = int(row.get("Номер записи") or 0)
+            except (TypeError, ValueError):
+                record_number = 0
+            return completeness, record_number
+
+        return max(carrier_matches, key=rank)
 
     def vehicle(self, number: str) -> dict | None:
         key = re.sub(r"[^A-ZА-Я0-9]", "", clean(number).upper())

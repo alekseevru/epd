@@ -45,7 +45,18 @@ const driverFields = {
   DOC_INFO:"Кем выдан паспорт", DOC_NUMBER:"Номер паспорта", DOC_SERIAL:"Серия паспорта",
   TRADE_DRIVERS_DOC_NUMBER:"Номер водительского удостоверения", TRADE_DRIVERS_DOC_SERIAL:"Серия водительского удостоверения",
 };
-const driverDateFieldCandidates = ["PROXY_DATE_END", "DATE_END_PROXY", "PROXY_END_DATE", "POWER_OF_ATTORNEY_END_DATE"];
+const driverDateFieldCandidates = [
+  "TRADE_DRIVERS_DATE_END",
+  "TRADE_DRIVERS_PROXY_DATE_END",
+  "TRADE_DRIVERS_DATE_END_PROXY",
+  "TRADE_DRIVERS_PROXY_END_DATE",
+  "DRIVER_PROXY_DATE_END",
+  "PROXY_DATE_END",
+  "DATE_END_PROXY",
+  "PROXY_END_DATE",
+  "DATE_END_POWER_OF_ATTORNEY",
+  "POWER_OF_ATTORNEY_END_DATE",
+];
 const warehouseFields = {
   ID:"Номер записи", WAREHOUSE_NUMBER_AND_NAME:"Номер склада и название", LIST_CITY_NAME:"Город",
   LIST_COUNTRY_NAME:"Страна", LIST_REGION_NAME:"Регион", COORDS_ADDRESS:"Адрес", LIST_WAREHOUSE_NAME:"Название",
