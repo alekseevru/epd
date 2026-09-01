@@ -145,13 +145,19 @@ class Catalogs:
             and (not kpp or clean(row.get("КПП")) == kpp)
             and clean(row.get("Дата ликвидации контрагента")) == "Действующая организация"
         ]
-        if len(active) == 1:
-            return clean(active[0].get("Идентификатор участника ЭДО"))
         all_rows = [row for row in self.edo if clean(row.get("ИНН")) == inn and (not kpp or clean(row.get("КПП")) == kpp)]
-        if len(all_rows) == 1:
-            return clean(all_rows[0].get("Идентификатор участника ЭДО"))
         by_inn = [row for row in self.edo if clean(row.get("ИНН")) == inn]
-        return clean(by_inn[0].get("Идентификатор участника ЭДО")) if len(by_inn) == 1 else ""
+        for candidates in (active, all_rows, by_inn):
+            if not candidates:
+                continue
+            participant_ids = [clean(row.get("Идентификатор участника ЭДО")) for row in candidates]
+            fns_ids = list(dict.fromkeys(value for value in participant_ids if value.upper().startswith("2BM-")))
+            if len(fns_ids) == 1:
+                return fns_ids[0]
+            unique_ids = list(dict.fromkeys(filter(None, participant_ids)))
+            if len(unique_ids) == 1:
+                return unique_ids[0]
+        return ""
 
     def driver(self, full_name: str) -> dict | None:
         key = normalize_name(full_name)
