@@ -353,7 +353,11 @@ class Generator:
         delivery_point = self.catalogs.point(delivery_name)
 
         def point_address(point, fallback):
-            return clean((point or {}).get("Адрес на русском языке") or (point or {}).get("Адрес") or fallback)
+            address = clean((point or {}).get("Адрес на русском языке") or (point or {}).get("Адрес") or fallback)
+            postal_code = clean((point or {}).get("Индекс"))
+            if postal_code and re.fullmatch(r"\d{6}", postal_code) and not re.search(r"(?<!\d)\d{6}(?!\d)", address):
+                address = f"{postal_code}, {address}"
+            return address
 
         def point_owner(point):
             inn = clean((point or {}).get("ИНН"))
