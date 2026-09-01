@@ -48,7 +48,8 @@ def address_attributes(text: str) -> dict:
     region = "78" if "санкт-петербург" in lowered or "спб" in lowered else (
         "77" if "москва" in lowered and "московск" not in lowered else
         "50" if "московск" in lowered else
-        "47" if "ленинградск" in lowered else "78"
+        "47" if "ленинградск" in lowered else
+        "52" if "нижний новгород" in lowered or "нижегородск" in lowered else "78"
     )
     attrs["КодРегион"] = region
     street_match = re.search(
@@ -240,7 +241,7 @@ class Generator:
         consignee_company = self.catalogs.company(consignee_name, inn=consignee_inn)
         carrier_company = self.catalogs.company(carrier_name)
         driver_name = clean(value(row, "Водитель", "ФИО водителя"))
-        driver = self.catalogs.driver(driver_name) or {}
+        driver = self.catalogs.driver(driver_name, carrier_name) or {}
         truck_number = clean(value(row, "Номер автомашины", "Транспортное средство"))
         truck = self.catalogs.vehicle(truck_number) or {}
         route = clean(value(row, "Маршрут"))
@@ -411,7 +412,9 @@ class Generator:
         # Для порожней перевозки погрузка выполняется на складе, куда был
         # доставлен груз. Владельцем этого объекта является грузополучатель
         # грузовой перевозки (клиент), а не грузоотправитель порожней ЭТрН.
-        owner_data = ctx["consignee"] if empty else ctx["loading_owner"]
+        owner_data = dict(ctx["consignee"]) if empty else ctx["loading_owner"]
+        if empty:
+            owner_data["address"] = ctx["delivery"]
         if owner is not None and owner_data.get("inn"):
             owner.set("СовпГОВ", "2")
             _set_legal(owner, owner_data)

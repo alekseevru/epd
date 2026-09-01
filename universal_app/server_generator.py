@@ -59,7 +59,7 @@ class Generator(BaseGenerator):
             loading_found = ctx.get("delivery_point_found") if empty else ctx.get("loading_point_found")
             if not loading_found:
                 warnings.append("Полный адрес погрузки не найден в справочнике точек маршрута.")
-            if not (ctx.get("delivery_owner") if empty else ctx.get("loading_owner")).get("inn"):
+            if not (ctx.get("consignee") if empty else ctx.get("loading_owner")).get("inn"):
                 warnings.append("В справочнике точек маршрута не найден владелец объекта пункта погрузки.")
             if not empty and not ctx.get("delivery_point_found"):
                 warnings.append("Полный адрес доставки не найден в справочнике точек маршрута.")
