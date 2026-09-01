@@ -24,6 +24,19 @@ KNOWN_PARTY_PHONES = {
     "7817137260": "+79255030287",  # АГМ
 }
 
+KNOWN_PARTY_PHONES_BY_NAME = {
+    "АГРЛ": "+79255030287",
+    "АГМ": "+79255030287",
+}
+
+KNOWN_POINT_PHONES = (
+    (("ПКТ", "ПЕРВЫЙ КОНТЕЙНЕРНЫЙ ТЕРМИНАЛ"), "+78123357701"),
+    (("ПЛП", "ПЕТРОЛЕСПОРТ"), "+78123638779"),
+    (("КТСП", "КОНТЕЙНЕРНЫЙ ТЕРМИНАЛ САНКТ ПЕТЕРБУРГ"), "+78123357111"),
+    (("НЕВА МЕТАЛЛ",), "+78127407011"),
+    (("ФЕНИКС БРОНКА", "БРОНКА", "ФЕНИКС"), "+78127772000"),
+)
+
 ADDRESS_PART_PATTERNS = {
     "Индекс": r"(?<!\d)(\d{6})(?!\d)",
     "Дом": r"(?:^|[,;]\s*|\s)(?:д(?:ом)?\.?)(?!\w)\s*([\w/-]+)",
@@ -39,6 +52,22 @@ def normalize_phone(value) -> str:
     elif len(digits) == 10:
         digits = "7" + digits
     return "+" + digits if digits else ""
+
+
+def known_party_phone(name: str) -> str:
+    return KNOWN_PARTY_PHONES_BY_NAME.get(normalize_name(name), "")
+
+
+def known_point_phone(point: dict | None) -> str:
+    point = point or {}
+    text = " ".join(clean(point.get(field)) for field in (
+        "Номер склада и название", "Название", "Название (англ)", "Адрес", "Адрес на русском языке"
+    ))
+    key = normalize_name(text)
+    for aliases, phone in KNOWN_POINT_PHONES:
+        if any(normalize_name(alias) in key for alias in aliases):
+            return phone
+    return ""
 
 
 def organization_name(company: dict, fallback_name: str = "") -> str:
@@ -95,11 +124,13 @@ def compact_address(value: str, limit: int = 50) -> str:
 
 def party(company: dict | None, fallback_name: str = "") -> dict:
     company = company or {}
+    name = organization_name(company, fallback_name)
+    inn = clean(company.get("ИНН"))
     return {
-        "name": organization_name(company, fallback_name),
-        "inn": clean(company.get("ИНН")),
+        "name": name,
+        "inn": inn,
         "kpp": clean(company.get("КПП")),
-        "phone": normalize_phone(company.get("Телефон") or company.get("Телефон (раб.)")) or KNOWN_PARTY_PHONES.get(clean(company.get("ИНН")), ""),
+        "phone": normalize_phone(company.get("Телефон") or company.get("Телефон (раб.)")) or KNOWN_PARTY_PHONES.get(inn, "") or known_party_phone(name),
         "address": clean(company.get("Фактический адрес") or company.get("Юридический адрес")),
     }
 
@@ -365,7 +396,7 @@ class Generator:
             result = party(company, clean((point or {}).get("Название")))
             if point:
                 result["address"] = point_address(point, result.get("address"))
-                result["phone"] = normalize_phone(point.get("Номер телефона")) or result.get("phone", "")
+                result["phone"] = normalize_phone(point.get("Номер телефона")) or known_point_phone(point) or result.get("phone", "")
             return result
 
         return {
