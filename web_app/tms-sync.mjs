@@ -46,6 +46,7 @@ const driverFields = {
   TRADE_DRIVERS_DOC_NUMBER:"Номер водительского удостоверения", TRADE_DRIVERS_DOC_SERIAL:"Серия водительского удостоверения",
 };
 const driverDateFieldCandidates = [
+  "TRUST_DATE",
   "TRADE_DRIVERS_DOC_DATE",
   "TRADE_DRIVERS_DATE_DOC",
   "TRADE_DRIVERS_LICENSE_DATE",
@@ -80,8 +81,7 @@ const warehousePostalCodeFieldCandidates = [
 const contractFieldCandidates = {
   "Дата договора": ["DATE_CONTRACT", "CONTRACT_DATE", "DATE_BEGIN", "CONTRACT_BEGIN_DATE", "Дата договора"],
   "Срок действия до": ["DATE_END", "CONTRACT_DATE_END", "VALID_TO"],
-  "Организация 1": ["COMPANY1_NAME", "COMPANY_1_NAME", "COMPANY_NAME_1", "LIST_COMPANY1_NAME", "LIST_COMPANY_NAME1", "LIST_COMPANY_NAME_1", "FIRST_COMPANY_NAME", "FIRST_LIST_COMPANY_NAME", "Организация 1"],
-  "Организация 2": ["COMPANY2_NAME", "COMPANY_2_NAME", "COMPANY_NAME_2", "LIST_COMPANY2_NAME", "LIST_COMPANY_NAME2", "LIST_COMPANY_NAME_2", "SECOND_COMPANY_NAME", "SECOND_LIST_COMPANY_NAME", "Организация 2"],
+  "Организация 1": ["LIST_COMPANY_NAME", "COMPANY1_NAME", "COMPANY_1_NAME", "COMPANY_NAME_1", "LIST_COMPANY1_NAME", "LIST_COMPANY_NAME1", "LIST_COMPANY_NAME_1", "FIRST_COMPANY_NAME", "FIRST_LIST_COMPANY_NAME", "Организация 1"],
   "Тип договора": ["TYPE_CONTRACT_NAME", "LIST_TYPE_CONTRACT_NAME", "CONTRACT_TYPE_NAME"],
   "Номер договора": ["NUMBER_CONTRACT", "CONTRACT_NUMBER", "NUM_CONTRACT", "CONTRACT_NUM", "NUMBER", "Номер договора"],
   "Тип взаимоотношений": ["TYPE_RELATIONSHIP_NAME", "LIST_TYPE_RELATIONSHIP_NAME", "RELATIONSHIP_TYPE_NAME"],
@@ -241,7 +241,7 @@ async function getContractRows(session,onProgress){
     const fieldName=await firstSupportedField(session,"LIST_CONTRACTS",candidates);
     if(fieldName)fields[fieldName]=label;
   }
-  for(const required of ["Организация 1","Организация 2","Номер договора"]){
+  for(const required of ["Организация 1","Номер договора"]){
     if(!Object.values(fields).includes(required))throw new Error("TMS не предоставила поле «"+required+"» реестра договоров");
   }
   return getRows(session,"LIST_CONTRACTS",fields,null,"",onProgress);
@@ -264,24 +264,9 @@ async function getAutoRows(session,filters,createdSince,onProgress){
 }
 
 async function getDriverRows(session,onProgress=()=>{}) {
-  let result = null;
-  let byId = null;
-  for (const fieldName of driverDateFieldCandidates) {
-    try {
-      const rows = await getRows(session,"LIST_DRIVERS",{...driverFields,[fieldName]:"Дата окончания доверенности"},null,"",onProgress);
-      if (!result) {
-        result = rows;
-        byId = new Map(result.map(row=>[String(row["Номер записи"]||""),row]));
-      }
-      for (const row of rows) {
-        const value=String(row["Дата окончания доверенности"]||"").trim();
-        if(!value)continue;
-        const target=byId.get(String(row["Номер записи"]||""));
-        if(target&&!String(target["Дата окончания доверенности"]||"").trim())target["Дата окончания доверенности"]=value;
-      }
-    } catch { /* Older TMS schemas may not expose this optional field. */ }
-  }
-  return result || getRows(session,"LIST_DRIVERS",driverFields,null,"",onProgress);
+  const fieldName = await firstSupportedField(session,"LIST_DRIVERS",driverDateFieldCandidates);
+  if (!fieldName) return getRows(session,"LIST_DRIVERS",driverFields,null,"",onProgress);
+  return getRows(session,"LIST_DRIVERS",{...driverFields,[fieldName]:"Дата окончания доверенности"},null,"",onProgress);
 }
 
 async function getWarehouseRows(session,onProgress=()=>{}) {
@@ -293,21 +278,18 @@ async function getWarehouseRows(session,onProgress=()=>{}) {
 
 const cleanText=value=>String(value??"").replace(/\s+/g," ").trim();
 const normalizedName=value=>cleanText(value).toLocaleUpperCase("ru-RU").replace(/[«»"'\x60]/g,"").replace(/\b(?:ООО|АО|ПАО|ЗАО|ИП|ОБЩЕСТВО С ОГРАНИЧЕННОЙ ОТВЕТСТВЕННОСТЬЮ)\b/g,"").replace(/[^A-ZА-Я0-9]+/g,"");
-const compactDate=value=>{if(value instanceof Date&&!Number.isNaN(value.getTime()))return value.toISOString().slice(0,10);const text=cleanText(value);const match=text.match(/^(\d{4})-(\d{2})-(\d{2})/);if(match)return [match[1],match[2],match[3]].join("-");const russian=text.match(/^(\d{1,2})[.](\d{1,2})[.](\d{4})/);if(russian)return [russian[3],russian[2].padStart(2,"0"),russian[1].padStart(2,"0")].join("-");const slash=text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})/);if(slash){const year=slash[3].length===2?"20"+slash[3]:slash[3];return [year,slash[1].padStart(2,"0"),slash[2].padStart(2,"0")].join("-");}return "";};
+const compactDate=value=>{if(value instanceof Date&&!Number.isNaN(value.getTime()))return value.toISOString().slice(0,10);if(typeof value==="number"&&Number.isFinite(value)){const parsed=new Date(Date.UTC(1899,11,30)+Math.floor(value)*86400000);if(!Number.isNaN(parsed.getTime()))return parsed.toISOString().slice(0,10);}const text=cleanText(value);const match=text.match(/^(\d{4})-(\d{2})-(\d{2})/);if(match)return [match[1],match[2],match[3]].join("-");const russian=text.match(/^(\d{1,2})[.](\d{1,2})[.](\d{4})/);if(russian)return [russian[3],russian[2].padStart(2,"0"),russian[1].padStart(2,"0")].join("-");const slash=text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})/);if(slash){const year=slash[3].length===2?"20"+slash[3]:slash[3];return [year,slash[1].padStart(2,"0"),slash[2].padStart(2,"0")].join("-");}return "";};
 const truthy=value=>["1","true","да","yes"].includes(cleanText(value).toLowerCase());
 
 export function contractRowsToCatalog(rows){
-  const taglex=normalizedName("ООО ТАГЛЕКС");
   const today=new Date().toISOString().slice(0,10);
   return rows.flatMap(row=>{
-    const number=cleanText(row["Номер договора"]),organization1=cleanText(row["Организация 1"]),organization2=cleanText(row["Организация 2"]);
-    if(!number||!organization1||!organization2||truthy(row["Архивирование договора"]))return [];
+    const number=cleanText(row["Номер договора"]),counterparty=cleanText(row["Организация 1"]);
+    if(!number||!counterparty||truthy(row["Архивирование договора"]))return [];
     const endDate=compactDate(row["Срок действия до"]);
     if(endDate&&!truthy(row["Бессрочный"])&&endDate<today)return [];
-    const firstIsTaglex=normalizedName(organization1)===taglex,secondIsTaglex=normalizedName(organization2)===taglex;
-    const counterparty=firstIsTaglex?organization2:secondIsTaglex?organization1:organization1;
     const relationship=cleanText(row["Тип взаимоотношений"]).toLowerCase(),type=cleanText(row["Тип договора"]);
-    const carrier=/подряд|поставщ|перевоз/.test(relationship+" "+type.toLowerCase())||(!relationship&&!firstIsTaglex);
+    const carrier=/подряд|поставщ|перевоз/.test(relationship+" "+type.toLowerCase());
     return [{[carrier?"carrier":"client"]:counterparty,aliases:[counterparty],number,date:compactDate(row["Дата договора"]),title:type||"Договор"}];
   });
 }
