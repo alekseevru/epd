@@ -191,6 +191,10 @@ def address_attributes(text: str) -> dict:
     # индекса используем адресный справочник, а не индекс юридического лица.
     if "Индекс" not in attrs and "нижний новгород" in lowered and "федосеенко" in lowered and re.search(r"\b54\b", lowered):
         attrs["Индекс"] = "603037"
+    if "Индекс" not in attrs and "автозавод" in lowered and ("шушар" in lowered or "санкт-петербург" in lowered or "спб" in lowered):
+        attrs["Индекс"] = "196657"
+    if "Индекс" not in attrs and "пресненск" in lowered and re.search(r"\b2\b", lowered):
+        attrs["Индекс"] = "123112"
     return attrs
 
 
