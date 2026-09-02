@@ -163,16 +163,25 @@ export default function Workspace() {
   const autoIndex = useMemo(() => {
     const map = new Map<string, Row>();
     const supplementalFields = ["Водитель","ФИО водителя","Телефон водителя","Номер автомашины","Транспортное средство","Номер прицепа"];
+    const operationScore = (row: Row) =>
+      (value(row,"Водитель","ФИО водителя") ? 8 : 0) +
+      (value(row,"Номер автомашины","Транспортное средство") ? 8 : 0) +
+      (value(row,"Маршрут") ? 4 : 0) +
+      (value(row,"Исполнитель","Перевозчик") ? 4 : 0) +
+      (value(row,"Плановая дата отправления") ? 2 : 0) +
+      (value(row,"Плановая дата прибытия") ? 2 : 0);
     autoRows.forEach((row) => {
       const key = rowContainer(row);
       if (!key) return;
       const selected = map.get(key);
       if (!selected) { map.set(key, {...row}); return; }
-      const supplemented = {...selected};
+      const preferCurrent = operationScore(row) > operationScore(selected);
+      const preferred = preferCurrent ? {...row} : {...selected};
+      const fallback = preferCurrent ? selected : row;
       supplementalFields.forEach((field) => {
-        if (!value(supplemented,field) && value(row,field)) supplemented[field]=row[field];
+        if (!value(preferred,field) && value(fallback,field)) preferred[field]=fallback[field];
       });
-      map.set(key,supplemented);
+      map.set(key,preferred);
     });
     return map;
   }, [autoRows]);
