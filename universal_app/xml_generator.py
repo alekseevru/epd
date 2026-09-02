@@ -403,14 +403,18 @@ class Generator:
                 result["phone"] = normalize_phone(point.get("Номер телефона")) or known_point_phone(point) or result.get("phone", "")
             return result
 
+        planned_departure_datetime = _as_datetime(
+            value(row, "Плановая дата отправления"), datetime.combine(trip_date, time(9))
+        )
+        order_date = min(trip_date, planned_departure_datetime.date())
         return {
             "container": container,
             "date": trip_date,
             "user": user,
             "client": party(client_company, client_name),
             "client_edo": self.catalogs.edo_id(client_company),
-            "order_number": f"{trip_date:%Y%m%d}-{container}",
-            "order_date": trip_date.strftime("%d.%m.%Y"),
+            "order_number": f"{order_date:%Y%m%d}-{container}",
+            "order_date": order_date.strftime("%d.%m.%Y"),
             "client_contract": self._contract_for(client_name),
             "carrier_contract": self._contract_for(carrier_name, role="carrier"),
             "consignee": party(consignee_company, consignee_name),
@@ -439,7 +443,7 @@ class Generator:
             "delivery_datetime": _as_datetime(value(row, "Планируемая дата доставки на склад", "Плановая дата доставки на склад", "Плановая дата прибытия", "Последняя план дата прибытия", "ETA (план дата прибытия)"), datetime.combine(trip_date, time(9))),
             "planned_arrival_datetime": _as_datetime(value(row, "Плановая дата прибытия", "Последняя план дата прибытия", "ETA (план дата прибытия)"), _as_datetime(value(row, "Планируемая дата доставки на склад", "Плановая дата доставки на склад"), datetime.combine(trip_date, time(17)))),
             "empty_delivery_datetime": _as_datetime(value(row, "Дата сдачи порожнего"), _as_datetime(value(row, "Плановая дата прибытия", "Последняя план дата прибытия", "ETA (план дата прибытия)"), datetime.combine(trip_date, time(9)))),
-            "planned_departure_datetime": _as_datetime(value(row, "Плановая дата отправления"), datetime.combine(trip_date, time(9))),
+            "planned_departure_datetime": planned_departure_datetime,
             # По согласованной логике ЭТрН фактическое прибытие на погрузку
             # совпадает с заявленной подачей; фактическое убытие ставится на час позже.
             "actual_departure_datetime": _as_datetime(value(row, "Плановая дата отправления"), datetime.combine(trip_date, time(9))),
