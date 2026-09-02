@@ -82,6 +82,7 @@ const contractFieldCandidates = {
   "Дата договора": ["DATE_CONTRACT", "CONTRACT_DATE", "DATE_BEGIN", "CONTRACT_BEGIN_DATE", "Дата договора"],
   "Срок действия до": ["DATE_END", "CONTRACT_DATE_END", "VALID_TO"],
   "Организация 1": ["LIST_COMPANY_NAME", "COMPANY1_NAME", "COMPANY_1_NAME", "COMPANY_NAME_1", "LIST_COMPANY1_NAME", "LIST_COMPANY_NAME1", "LIST_COMPANY_NAME_1", "FIRST_COMPANY_NAME", "FIRST_LIST_COMPANY_NAME", "Организация 1"],
+  "Организация 2": ["LIST_COMPANY2_NAME", "COMPANY2_NAME", "COMPANY_2_NAME", "COMPANY_NAME_2", "LIST_COMPANY_NAME2", "LIST_COMPANY_NAME_2", "SECOND_COMPANY_NAME", "SECOND_LIST_COMPANY_NAME", "Организация 2"],
   "Тип договора": ["TYPE_CONTRACT_NAME", "LIST_TYPE_CONTRACT_NAME", "CONTRACT_TYPE_NAME"],
   "Номер договора": ["NUMBER_CONTRACT", "CONTRACT_NUMBER", "NUM_CONTRACT", "CONTRACT_NUM", "NUMBER", "Номер договора"],
   "Тип взаимоотношений": ["TYPE_RELATIONSHIP_NAME", "LIST_TYPE_RELATIONSHIP_NAME", "RELATIONSHIP_TYPE_NAME"],
@@ -285,7 +286,9 @@ const truthy=value=>["1","true","да","yes"].includes(cleanText(value).toLowerC
 export function contractRowsToCatalog(rows){
   const today=new Date().toISOString().slice(0,10);
   return rows.flatMap(row=>{
-    const number=cleanText(row["Номер договора"]),counterparty=cleanText(row["Организация 1"]);
+    const number=cleanText(row["Номер договора"]),company1=cleanText(row["Организация 1"]),company2=cleanText(row["Организация 2"]);
+    const taglex=normalizedName("ООО Таглекс"),company1IsTaglex=normalizedName(company1)===taglex,company2IsTaglex=normalizedName(company2)===taglex;
+    const counterparty=company1IsTaglex&&company2?company2:company2IsTaglex&&company1?company1:company2||company1;
     if(!number||!counterparty||truthy(row["Архивирование договора"]))return [];
     const endDate=compactDate(row["Срок действия до"]);
     if(endDate&&!truthy(row["Бессрочный"])&&endDate<today)return [];
