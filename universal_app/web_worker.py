@@ -142,6 +142,9 @@ def handle(request):
     if not user:
         raise ValueError("Не указан сотрудник, который формирует документ")
     ctx = generator.context(row, date.fromisoformat(request.get("date") or date.today().isoformat()), user, stock)
+    if request.get("action") == "resolve_order_addresses":
+        return {"loading": ctx["loading"], "delivery": ctx["delivery"]}
+    ctx["gar_addresses"] = request.get("garAddresses") or {}
     kind = request["kind"]
     warnings = generator.warnings(ctx, empty=kind == "empty", ezz=kind == "order")
     if warnings and not request.get("confirmWarnings"):

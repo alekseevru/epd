@@ -153,6 +153,16 @@ async function diadocJson(pathname,accessToken,options={}){
   const text=await response.text();let result={};try{result=JSON.parse(text);}catch{result={message:text};}
   if(!response.ok)throw new Error(result.message||result.error_description||result.error||`Диадок вернул HTTP ${response.status}`);return result;
 }
+async function resolveGarAddress(address){
+  const key=normalizeAddressKey(address);if(!key)return null;
+  const cache=loadGarAddressCache();if(Object.hasOwn(cache,key))return cache[key];
+  try{
+    const accessToken=await getKonturAccessToken();
+    const result=await diadocJson(`/V1/ParseGarAddress?address=${encodeURIComponent(address)}&isAdministrativeDivision=false`,accessToken);
+    const resolved=result&&result.FiasId&&result.RegionCode?result:null;
+    cache[key]=resolved;saveGarAddressCache();return resolved;
+  }catch{return null;}
+}
 async function diadocEntityText(accessToken,boxId,messageId,entityId){
   const response=await fetch(`${diadocApiUrl}/V4/GetEntityContent?boxId=${encodeURIComponent(boxId)}&messageId=${encodeURIComponent(messageId)}&entityId=${encodeURIComponent(entityId)}`,{headers:{Authorization:`Bearer ${accessToken}`},signal:AbortSignal.timeout(45_000)});
   if(!response.ok)throw new Error(`Не удалось прочитать титул: HTTP ${response.status}`);const bytes=Buffer.from(await response.arrayBuffer());
@@ -251,6 +261,24 @@ const python = process.env.PYTHON_BIN || (process.platform === "win32" ? "C:/Use
 const workerScript = path.join(root,"..","universal_app","web_worker.py");
 let generatorWorker, workerBuffer="", requestSequence=0;
 const pending=new Map();
+const garCacheFile=path.join(root,"work","gar-addresses.json");
+let garAddressCache=null;
+function loadGarAddressCache(){
+  if(garAddressCache)return garAddressCache;
+  try{garAddressCache=JSON.parse(fs.readFileSync(garCacheFile,"utf8"));}catch{garAddressCache={};}
+  return garAddressCache;
+}
+function saveGarAddressCache(){fs.mkdirSync(path.dirname(garCacheFile),{recursive:true});fs.writeFileSync(garCacheFile,JSON.stringify(garAddressCache,null,2),"utf8");}
+const normalizeAddressKey=value=>String(value||"").toLowerCase().replace(/\s+/g," ").trim();
+function sendGeneratorRequest(payload,timeoutMs=60_000){
+  return new Promise(resolve=>{
+    const requestId=++requestSequence;payload={...payload,requestId};
+    if(!generatorWorker||generatorWorker.exitCode!==null||generatorWorker.killed)startGeneratorWorker();
+    const timeout=setTimeout(()=>{const item=pending.get(requestId);if(item){pending.delete(requestId);item({requestId,error:"Генератор XML не ответил за 60 секунд"});}},timeoutMs);
+    pending.set(requestId,result=>{clearTimeout(timeout);resolve(result);});
+    generatorWorker.stdin.write(JSON.stringify(payload)+"\n");
+  });
+}
 function failPendingDocuments(message){
   for(const [id,item] of pending){pending.delete(id);item({requestId:id,error:message});}
 }
@@ -393,15 +421,27 @@ const server = http.createServer((request, response) => {
     }); return;
   }
   if (request.method === "POST" && url.pathname === "/api/generate") {
-    let body=""; request.setEncoding("utf8"); request.on("data",chunk=>{body+=chunk;}); request.on("end",()=>{
+    let body=""; request.setEncoding("utf8"); request.on("data",chunk=>{body+=chunk;}); request.on("end",()=>{void(async()=>{
       try {
-        const payload=JSON.parse(body); const requestId=++requestSequence; payload.requestId=requestId;
-        if(!generatorWorker||generatorWorker.exitCode!==null||generatorWorker.killed) startGeneratorWorker();
-        const timeout=setTimeout(()=>{const item=pending.get(requestId);if(item){pending.delete(requestId);item({requestId,error:"Генератор XML не ответил за 60 секунд"});}},60_000);
-        pending.set(requestId,(result)=>{clearTimeout(timeout);response.writeHead(result.error?400:200,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify(result));});
-        generatorWorker.stdin.write(JSON.stringify(payload)+"\n");
+        const payload=JSON.parse(body);
+        if(payload.kind==="order"){
+          const addresses=await sendGeneratorRequest({...payload,action:"resolve_order_addresses"});
+          if(addresses.error)throw new Error(addresses.error);
+          const [loading,delivery]=await Promise.all([resolveGarAddress(addresses.loading),resolveGarAddress(addresses.delivery)]);
+          payload.garAddresses={loading,delivery};
+          const garWarnings=[];
+          if(!loading)garWarnings.push("Для адреса погрузки не определён код ФИАС. Скорректируйте адрес вручную в заявке перед подписанием.");
+          if(!delivery)garWarnings.push("Для адреса выгрузки не определён код ФИАС. Скорректируйте адрес вручную в заявке перед подписанием.");
+          if(garWarnings.length&&!payload.confirmWarnings){
+            response.writeHead(200,{"Content-Type":"application/json; charset=utf-8"});
+            response.end(JSON.stringify({requiresConfirmation:true,warnings:garWarnings}));
+            return;
+          }
+        }
+        const result=await sendGeneratorRequest(payload);
+        response.writeHead(result.error?400:200,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify(result));
       } catch(error){response.writeHead(400,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({error:error.message||"Некорректный запрос"}));}
-    }); return;
+    })();}); return;
   }
   const relativePath = decodeURIComponent(url.pathname).replace(/^\/+/, "");
   const staticFile = path.join(clientRoot, relativePath);

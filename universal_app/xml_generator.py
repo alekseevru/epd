@@ -198,11 +198,18 @@ def address_attributes(text: str) -> dict:
     return attrs
 
 
-def _set_address(wrapper: ET.Element | None, text: str, child_name: str = "АдрРФ"):
+def _set_address(wrapper: ET.Element | None, text: str, child_name: str = "АдрРФ", gar: dict | None = None):
     if wrapper is None:
         return
     for child in list(wrapper):
         wrapper.remove(child)
+    if gar and clean(gar.get("FiasId")) and clean(gar.get("RegionCode")):
+        attrs = {"ИдНом": clean(gar["FiasId"])}
+        if clean(gar.get("ZipCode")):
+            attrs["Индекс"] = clean(gar["ZipCode"])
+        node = ET.SubElement(wrapper, "АдрФИАС", attrs)
+        ET.SubElement(node, "Регион").text = clean(gar["RegionCode"])
+        return
     ET.SubElement(wrapper, child_name, address_attributes(text))
 
 
@@ -605,12 +612,13 @@ class Generator:
         finish = ctx["planned_arrival_datetime"]
         point = info.find("ПунктПод")
         point.set("ДатВрПод", _epd_datetime(start))
-        _set_address(point.find("АдрПунктПод/Адрес"), ctx["loading"])
+        gar_addresses = ctx.get("gar_addresses") or {}
+        _set_address(point.find("АдрПунктПод/Адрес"), ctx["loading"], gar=gar_addresses.get("loading"))
         route_points = info.findall("АдрПункт")
         route_points[0].set("ДатВрОпер", _epd_datetime(start))
         route_points[1].set("ДатВрОпер", _epd_datetime(finish))
-        _set_address(route_points[0].find("АдресПункт/Адрес"), ctx["loading"])
-        _set_address(route_points[1].find("АдресПункт/Адрес"), ctx["delivery"])
+        _set_address(route_points[0].find("АдресПункт/Адрес"), ctx["loading"], gar=gar_addresses.get("loading"))
+        _set_address(route_points[1].find("АдресПункт/Адрес"), ctx["delivery"], gar=gar_addresses.get("delivery"))
         cargo = info.find("ОпГруз")
         cargo.set("НаимГруз", f"Контейнер {ctx['container']}")
         cargo.find("МасГруз").set("МасБрутЗнач", ctx["weight"])
