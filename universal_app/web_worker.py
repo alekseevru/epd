@@ -99,6 +99,15 @@ def refresh_sources():
         "Водитель", "ФИО водителя", "Телефон водителя",
         "Номер автомашины", "Транспортное средство", "Номер прицепа", "Грузополучатель",
     )
+    def operation_score(row):
+        return sum((
+            8 if clean(value(row, "Водитель", "ФИО водителя")) else 0,
+            8 if clean(value(row, "Номер автомашины", "Транспортное средство")) else 0,
+            4 if clean(value(row, "Маршрут")) else 0,
+            4 if clean(value(row, "Исполнитель", "Перевозчик")) else 0,
+            2 if clean(value(row, "Плановая дата отправления")) else 0,
+            2 if clean(value(row, "Плановая дата прибытия")) else 0,
+        ))
     for row in read_source(auto_source, auto_file, "OPERATION_SUB_DOC"):
         import re
         match = re.search(r"[A-ZА-Я]{4}\d{7}", clean(row.get("Номера грузовых единиц")).upper())
@@ -109,9 +118,10 @@ def refresh_sources():
             # TMS exports rows by ID descending: keep the newest operation.
             auto_index[container] = dict(row)
             continue
-        # Preserve the newest route and dates, but fill missing driver/vehicle
-        # data from other operations of the same container.
         selected = auto_index[container]
+        if operation_score(row) > operation_score(selected):
+            selected, row = dict(row), selected
+            auto_index[container] = selected
         for field in supplemental_fields:
             if not clean(selected.get(field)) and clean(row.get(field)):
                 selected[field] = row[field]
