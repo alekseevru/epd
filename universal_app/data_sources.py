@@ -162,6 +162,27 @@ class Catalogs:
                 return unique_ids[0]
         return ""
 
+    def edo_options(self, company: dict | None) -> list[dict]:
+        if not company:
+            return []
+        inn, kpp = clean(company.get("ИНН") or company.get("inn")), clean(company.get("КПП") or company.get("kpp"))
+        rows = [row for row in self.edo if clean(row.get("ИНН")) == inn and (not kpp or clean(row.get("КПП")) == kpp)]
+        if not rows and inn:
+            rows = [row for row in self.edo if clean(row.get("ИНН")) == inn]
+        result, seen = [], set()
+        for row in rows:
+            participant_id = clean(row.get("Идентификатор участника ЭДО"))
+            if not participant_id or participant_id in seen:
+                continue
+            seen.add(participant_id)
+            result.append({
+                "id": participant_id,
+                "name": clean(row.get("Название организации")),
+                "status": clean(row.get("Статус")),
+                "boxId": clean(row.get("ID ящика")),
+            })
+        return result
+
     def driver(self, full_name: str, carrier_name: str = "") -> dict | None:
         key = normalize_name(full_name)
 

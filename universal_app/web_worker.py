@@ -142,9 +142,17 @@ def handle(request):
     if not user:
         raise ValueError("Не указан сотрудник, который формирует документ")
     ctx = generator.context(row, date.fromisoformat(request.get("date") or date.today().isoformat()), user, stock)
+    if request.get("action") == "edo_options":
+        return {"parties": [
+            {"role": role, "name": ctx[role]["name"], "inn": ctx[role]["inn"], "kpp": ctx[role]["kpp"], "currentId": ctx[f"{role}_edo"], "options": catalogs.edo_options(ctx[role])}
+            for role in ("client", "consignee", "carrier")
+        ]}
     if request.get("action") == "resolve_order_addresses":
         return {"loading": ctx["loading"], "delivery": ctx["delivery"]}
     ctx["gar_addresses"] = request.get("garAddresses") or {}
+    for role, participant_id in (request.get("edoOverrides") or {}).items():
+        if role in {"client", "consignee", "carrier"} and clean(participant_id):
+            ctx[f"{role}_edo"] = clean(participant_id)
     kind = request["kind"]
     warnings = generator.warnings(ctx, empty=kind == "empty", ezz=kind == "order")
     if warnings and not request.get("confirmWarnings"):

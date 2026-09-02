@@ -262,6 +262,28 @@ const workerScript = path.join(root,"..","universal_app","web_worker.py");
 let generatorWorker, workerBuffer="", requestSequence=0;
 const pending=new Map();
 const garCacheFile=path.join(root,"work","gar-addresses.json");
+const edoPreferencesFile=path.join(root,"work","edo-preferences.json");
+const loadEdoPreferences=()=>{try{return JSON.parse(fs.readFileSync(edoPreferencesFile,"utf8"));}catch{return {};}};
+const saveEdoPreferences=value=>{fs.mkdirSync(path.dirname(edoPreferencesFile),{recursive:true});fs.writeFileSync(edoPreferencesFile,JSON.stringify(value,null,2),"utf8");};
+const edoPreferenceKey=party=>`${String(party.inn||"").trim()}|${String(party.kpp||"").trim()}`;
+const normalizeBoxId=value=>String(value||"").toLowerCase().replace(/@diadoc\.ru$/i,"").replaceAll("-","");
+const edoOperator=participantId=>{const prefix=String(participantId||"").trim().slice(0,3).toUpperCase();return ({"2AE":"Калуга Астрал","2BE":"СБИС (Тензор)","2BM":"Контур.Диадок","2PS":"ПС СТ (OFD.ru)","2JD":"НИИАС","2AH":"ИнфоТеКС Интернет Траст","2AD":"Русь-Телеком","2LB":"ЭТП ГПБ","2VO":"Эвотор ОФД","2LT":"Оператор-ЦРПТ","2HU":"Национальный удостоверяющий центр","2BK":"КОРУС Консалтинг СНГ","2BA":"НТЦ СТЭК","2HX":"Криптэкс","2AK":"ТаксНет","2LD":"Э-КОМ","2LJ":"Финтендер-крипто","2LH":"ФораПром (LERADATA)","2CI":"Электронный экспресс (Гарант)","2LG":"Бифит ЭДО","2BV":"МО ПНИЭИ-КрасКрипт","2JM":"Сислинк","2IJ":"Эдисофт","2CA":"Мостинфо-Екатеринбург","2JF":"НТСсофт","2GP":"КДС","2MC":"АТИ-Доки","2BN":"Линк-Сервис"})[prefix]||`Оператор с кодом ${prefix||"не определён"}`;};
+let signedEdoEvidenceCache={expiresAt:0,value:new Map(),checked:new Set(),documents:null};
+async function loadSignedEdoEvidence(parties=[]){
+  if(signedEdoEvidenceCache.expiresAt<=Date.now())signedEdoEvidenceCache={expiresAt:Date.now()+10*60_000,value:new Map(),checked:new Set(),documents:null};
+  const targetBoxes=new Set((parties||[]).flatMap(party=>party.options||[]).map(option=>normalizeBoxId(option.boxId)).filter(Boolean));const missing=new Set([...targetBoxes].filter(boxId=>!signedEdoEvidenceCache.checked.has(boxId)));if(!missing.size)return signedEdoEvidenceCache.value;
+  const config=konturConfig();const accessToken=await getKonturAccessToken();const months=Math.max(1,Number(process.env.KONTUR_EDO_HISTORY_MONTHS||12));const from=new Date();from.setMonth(from.getMonth()-months);
+  const formatDate=date=>`${String(date.getDate()).padStart(2,"0")}.${String(date.getMonth()+1).padStart(2,"0")}.${date.getFullYear()}`;
+  if(!signedEdoEvidenceCache.documents){const documents=[];let afterIndexKey="";for(let page=0;page<20;page++){
+    const body={DocumentTypeNamedIds:["LogisticsWaybill","LogisticsOrderRequest","LogisticsForwardingOrder"],DocumentCategory:"Any",FromDocumentDate:formatDate(from),SortDirection:"Descending",Count:100,...(afterIndexKey?{AfterIndexKey:afterIndexKey}:{})};const list=await diadocJson(`/V4/GetDocuments?boxId=${encodeURIComponent(config.boxId)}`,accessToken,{method:"POST",body:JSON.stringify(body)});const portion=list.Documents||[];documents.push(...portion);if(portion.length<100)break;afterIndexKey=portion.at(-1)?.IndexKey||"";if(!afterIndexKey)break;
+  }const unique=[];const seen=new Set();for(const document of documents){if(document.IsDeleted)continue;const key=`${document.MessageId}:${document.EntityId}`;if(!seen.has(key)){seen.add(key);unique.push(document);}}signedEdoEvidenceCache.documents=unique;
+  }
+  const relevant=signedEdoEvidenceCache.documents.filter(document=>missing.has(normalizeBoxId(document.CounteragentBoxId)));const messages=await mapLimit(relevant,5,async document=>{try{return {document,message:await diadocJson(`/V3/GetMessage?boxId=${encodeURIComponent(config.boxId)}&messageId=${encodeURIComponent(document.MessageId)}&injectEntityContent=false`,accessToken)};}catch{return {document,message:null};}});const stats=new Map([...missing].map(boxId=>[boxId,{count:0,lastSignedAt:"",documentNumber:""}]));
+  for(const {document,message} of messages){const boxId=normalizeBoxId(document.CounteragentBoxId);const signed=(message?.Entities||[]).some(entity=>entity.EntityType==="Signature"&&normalizeBoxId(entity.SignerBoxId)===boxId);if(!signed)continue;const current=stats.get(boxId);current.count++;if(!current.lastSignedAt){current.lastSignedAt=document.CreationTimestamp||document.DocumentDate||"";current.documentNumber=document.DocumentNumber||"";}}
+  for(const boxId of missing){const stat=stats.get(boxId);if(stat?.count)signedEdoEvidenceCache.value.set(boxId,stat);signedEdoEvidenceCache.checked.add(boxId);}return signedEdoEvidenceCache.value;
+}
+const decorateEdoParties=(parties,evidence=new Map())=>{const preferences=loadEdoPreferences();return (parties||[]).map(party=>{const key=edoPreferenceKey(party);const preference=preferences[key];const options=(party.options||[]).map(option=>({...option,operator:edoOperator(option.id),history:evidence.get(normalizeBoxId(option.boxId))||null}));const confirmed=options.filter(option=>option.history).sort((left,right)=>right.history.count-left.history.count);const historyChoice=confirmed.length===1?confirmed[0]:null;const ambiguous=options.length>1;const selectedId=preference?.participantId||historyChoice?.id||(!ambiguous?party.currentId||options[0]?.id||"":"");const history=historyChoice?.history||null;return {...party,options,key,selectedId,selectionSource:preference?"manual":historyChoice?"history":selectedId?"automatic":"unresolved",selectedBy:preference?.selectedBy||"",selectedAt:preference?.selectedAt||"",history};});};
+const edoDirectoryParties=()=>{if(!fs.existsSync(sourceFiles.edo()))return [];const groups=new Map();for(const row of parseSemicolonCsv(fs.readFileSync(sourceFiles.edo(),"utf8"))){const inn=String(row["ИНН"]||"").trim(),kpp=String(row["КПП"]||"").trim(),id=String(row["Идентификатор участника ЭДО"]||"").trim();if(!inn||!id)continue;const key=`${inn}|${kpp}`;if(!groups.has(key))groups.set(key,{role:"counterparty",name:String(row["Название организации"]||"").trim(),inn,kpp,currentId:id,options:[]});const group=groups.get(key);if(!group.currentId)group.currentId=id;if(!group.options.some(option=>option.id===id))group.options.push({id,name:String(row["Название организации"]||"").trim(),status:String(row["Статус"]||"").trim(),boxId:String(row["ID ящика"]||"").trim()});}return [...groups.values()].filter(party=>party.options.length>1).sort((left,right)=>left.name.localeCompare(right.name,"ru"));};
 let garAddressCache=null;
 function loadGarAddressCache(){
   if(garAddressCache)return garAddressCache;
@@ -420,10 +442,23 @@ const server = http.createServer((request, response) => {
       } catch(error){response.writeHead(400,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({error:error.message||"Не удалось сохранить справочник"}));}
     }); return;
   }
+  if(request.method==="POST"&&url.pathname==="/api/edo-options"){
+    let body="";request.setEncoding("utf8");request.on("data",chunk=>body+=chunk);request.on("end",()=>{void(async()=>{try{const payload=JSON.parse(body);const result=await sendGeneratorRequest({...payload,action:"edo_options"});if(result.error)throw new Error(result.error);const evidence=await loadSignedEdoEvidence(result.parties);response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify({parties:decorateEdoParties(result.parties,evidence)}));}catch(error){response.writeHead(400,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({error:error.message||"Не удалось получить варианты ID ЭДО"}));}})();});return;
+  }
+  if(request.method==="GET"&&url.pathname==="/api/edo-directory"){
+    void(async()=>{try{const parties=edoDirectoryParties();const evidence=await loadSignedEdoEvidence(parties);response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify({parties:decorateEdoParties(parties,evidence),generatedAt:new Date().toISOString()}));}catch(error){response.writeHead(502,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({error:error.message||"Не удалось загрузить настройки ID ЭДО"}));}})();return;
+  }
+  if(request.method==="POST"&&url.pathname==="/api/edo-preference"){
+    let body="";request.setEncoding("utf8");request.on("data",chunk=>body+=chunk);request.on("end",()=>{try{const payload=JSON.parse(body);const key=String(payload.key||"").trim();const participantId=String(payload.participantId||"").trim();if(!/^\d{10,12}\|/.test(key)||!participantId)throw new Error("Некорректный участник ЭДО");const preferences=loadEdoPreferences();preferences[key]={participantId,selectedBy:String(payload.selectedBy||"Пользователь").trim(),selectedAt:new Date().toISOString()};saveEdoPreferences(preferences);response.writeHead(200,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({ok:true,preference:preferences[key]}));}catch(error){response.writeHead(400,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({error:error.message||"Не удалось сохранить выбор ID ЭДО"}));}});return;
+  }
   if (request.method === "POST" && url.pathname === "/api/generate") {
     let body=""; request.setEncoding("utf8"); request.on("data",chunk=>{body+=chunk;}); request.on("end",()=>{void(async()=>{
       try {
         const payload=JSON.parse(body);
+        const edoOptions=await sendGeneratorRequest({...payload,action:"edo_options"});
+        if(edoOptions.error)throw new Error(edoOptions.error);
+        const evidence=await loadSignedEdoEvidence(edoOptions.parties);
+        const decoratedEdoParties=decorateEdoParties(edoOptions.parties,evidence);const unresolvedEdoParties=decoratedEdoParties.filter(party=>!party.selectedId);if(unresolvedEdoParties.length){const missing=unresolvedEdoParties.filter(party=>!(party.options||[]).length);const prefix=missing.length?"Нет ID в справочнике ЭДО для":"Выберите ID ЭДО для";throw new Error(`${prefix}: ${[...new Set(unresolvedEdoParties.map(party=>party.name))].join(", ")}`);}payload.edoOverrides=Object.fromEntries(decoratedEdoParties.map(party=>[party.role,party.selectedId]));
         if(payload.kind==="order"){
           const addresses=await sendGeneratorRequest({...payload,action:"resolve_order_addresses"});
           if(addresses.error)throw new Error(addresses.error);
