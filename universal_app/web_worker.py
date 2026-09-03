@@ -9,7 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
-from data_sources import Catalogs, clean, read_counteragents, read_xlsx, value
+from data_sources import Catalogs, clean, normalize_name, read_counteragents, read_xlsx, value
 from server_generator import Generator
 
 
@@ -99,8 +99,9 @@ def refresh_sources():
         "Водитель", "ФИО водителя", "Телефон водителя",
         "Номер автомашины", "Транспортное средство", "Номер прицепа", "Грузополучатель",
     )
-    def operation_score(row):
+    def operation_score(row, expected_carrier=""):
         return sum((
+            100 if expected_carrier and normalize_name(value(row, "Исполнитель", "Перевозчик")) == normalize_name(expected_carrier) else 0,
             8 if clean(value(row, "Водитель", "ФИО водителя")) else 0,
             8 if clean(value(row, "Номер автомашины", "Транспортное средство")) else 0,
             4 if clean(value(row, "Маршрут")) else 0,
@@ -119,12 +120,14 @@ def refresh_sources():
             auto_index[container] = dict(row)
             continue
         selected = auto_index[container]
-        if operation_score(row) > operation_score(selected):
+        expected_carrier = clean(value(cargo_index.get(container) or {}, "Перевозчик", "Исполнитель"))
+        if operation_score(row, expected_carrier) > operation_score(selected, expected_carrier):
             selected, row = dict(row), selected
             auto_index[container] = selected
-        for field in supplemental_fields:
-            if not clean(selected.get(field)) and clean(row.get(field)):
-                selected[field] = row[field]
+        if normalize_name(value(selected, "Исполнитель", "Перевозчик")) == normalize_name(value(row, "Исполнитель", "Перевозчик")):
+            for field in supplemental_fields:
+                if not clean(selected.get(field)) and clean(row.get(field)):
+                    selected[field] = row[field]
     source_stamp = stamp
 
 

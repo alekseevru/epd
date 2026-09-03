@@ -9,6 +9,7 @@ import * as XLSX from "xlsx";
 import { syncTms, contractRowsToCatalog } from "./tms-sync.mjs";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
+const appPackage = JSON.parse(fs.readFileSync(path.join(root,"package.json"),"utf8"));
 const localEnvFile = path.join(root,"..",".env");
 if (fs.existsSync(localEnvFile) && typeof process.loadEnvFile === "function") process.loadEnvFile(localEnvFile);
 const clientRoot = path.join(root, "dist", "client");
@@ -386,6 +387,10 @@ const server = http.createServer((request, response) => {
   if(request.method==="POST"&&url.pathname==="/api/kontur/sync-counteragents"){
     response.writeHead(200,{"Content-Type":"application/x-ndjson; charset=utf-8","Cache-Control":"no-cache"});const send=payload=>response.write(JSON.stringify(payload)+"\n");void(async()=>{try{const result=await runCounteragentSync(event=>send({type:"progress",...event}));send({type:"complete",result});}catch(error){send({type:"error",error:error.message||"Не удалось обновить контрагентов из Диадока"});}finally{response.end();}})();return;
   }
+  if(request.method==="GET"&&url.pathname==="/api/version"){
+    response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});
+    response.end(JSON.stringify({version:appPackage.version,build:process.env.APP_BUILD||process.env.GIT_COMMIT||""}));return;
+  }
   if (request.method === "GET" && url.pathname === "/api/tms-status") {
     const configured=Boolean((process.env.TMS_LOGIN&&process.env.TMS_PASSWORD)||fs.existsSync(credentialsFile));
     response.writeHead(200,{"Content-Type":"application/json; charset=utf-8"});
@@ -443,10 +448,10 @@ const server = http.createServer((request, response) => {
     }); return;
   }
   if(request.method==="POST"&&url.pathname==="/api/edo-options"){
-    let body="";request.setEncoding("utf8");request.on("data",chunk=>body+=chunk);request.on("end",()=>{void(async()=>{try{const payload=JSON.parse(body);const result=await sendGeneratorRequest({...payload,action:"edo_options"});if(result.error)throw new Error(result.error);const evidence=await loadSignedEdoEvidence(result.parties);response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify({parties:decorateEdoParties(result.parties,evidence)}));}catch(error){response.writeHead(400,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({error:error.message||"Не удалось получить варианты ID ЭДО"}));}})();});return;
+    let body="";request.setEncoding("utf8");request.on("data",chunk=>body+=chunk);request.on("end",()=>{void(async()=>{try{const payload=JSON.parse(body);const result=await sendGeneratorRequest({...payload,action:"edo_options"});if(result.error)throw new Error(result.error);let evidence=new Map();try{evidence=await loadSignedEdoEvidence(result.parties);}catch{}response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify({parties:decorateEdoParties(result.parties,evidence)}));}catch(error){response.writeHead(400,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({error:error.message||"Не удалось получить варианты ID ЭДО"}));}})();});return;
   }
   if(request.method==="GET"&&url.pathname==="/api/edo-directory"){
-    void(async()=>{try{const parties=edoDirectoryParties();const evidence=await loadSignedEdoEvidence(parties);response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify({parties:decorateEdoParties(parties,evidence),generatedAt:new Date().toISOString()}));}catch(error){response.writeHead(502,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({error:error.message||"Не удалось загрузить настройки ID ЭДО"}));}})();return;
+    void(async()=>{try{const parties=edoDirectoryParties();let evidence=new Map();try{evidence=await loadSignedEdoEvidence(parties);}catch{}response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify({parties:decorateEdoParties(parties,evidence),generatedAt:new Date().toISOString()}));}catch(error){response.writeHead(502,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({error:error.message||"Не удалось загрузить настройки ID ЭДО"}));}})();return;
   }
   if(request.method==="POST"&&url.pathname==="/api/edo-preference"){
     let body="";request.setEncoding("utf8");request.on("data",chunk=>body+=chunk);request.on("end",()=>{try{const payload=JSON.parse(body);const key=String(payload.key||"").trim();const participantId=String(payload.participantId||"").trim();if(!/^\d{10,12}\|/.test(key)||!participantId)throw new Error("Некорректный участник ЭДО");const preferences=loadEdoPreferences();preferences[key]={participantId,selectedBy:String(payload.selectedBy||"Пользователь").trim(),selectedAt:new Date().toISOString()};saveEdoPreferences(preferences);response.writeHead(200,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({ok:true,preference:preferences[key]}));}catch(error){response.writeHead(400,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({error:error.message||"Не удалось сохранить выбор ID ЭДО"}));}});return;
@@ -457,7 +462,7 @@ const server = http.createServer((request, response) => {
         const payload=JSON.parse(body);
         const edoOptions=await sendGeneratorRequest({...payload,action:"edo_options"});
         if(edoOptions.error)throw new Error(edoOptions.error);
-        const evidence=await loadSignedEdoEvidence(edoOptions.parties);
+        let evidence=new Map();try{evidence=await loadSignedEdoEvidence(edoOptions.parties);}catch{}
         const decoratedEdoParties=decorateEdoParties(edoOptions.parties,evidence);const unresolvedEdoParties=decoratedEdoParties.filter(party=>!party.selectedId);if(unresolvedEdoParties.length){const missing=unresolvedEdoParties.filter(party=>!(party.options||[]).length);const prefix=missing.length?"Нет ID в справочнике ЭДО для":"Выберите ID ЭДО для";throw new Error(`${prefix}: ${[...new Set(unresolvedEdoParties.map(party=>party.name))].join(", ")}`);}payload.edoOverrides=Object.fromEntries(decoratedEdoParties.map(party=>[party.role,party.selectedId]));
         if(payload.kind==="order"){
           const addresses=await sendGeneratorRequest({...payload,action:"resolve_order_addresses"});

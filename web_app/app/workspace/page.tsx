@@ -3,6 +3,7 @@
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import styles from "./workspace.module.css";
+import appPackage from "../../package.json";
 
 type Row = Record<string, unknown>;
 type EdoOption={id:string;name:string;status:string;boxId:string;operator:string;history?:{count:number;lastSignedAt:string;documentNumber:string}|null};
@@ -60,6 +61,7 @@ const normalizeContainer = (input: unknown) => {
   const letters: Record<string, string> = { А:"A",В:"B",С:"C",Е:"E",Н:"H",К:"K",М:"M",О:"O",Р:"P",Т:"T",Х:"X",У:"Y" };
   return match[0].replace(/[АВСЕНКМОРТХУ]/g, (letter) => letters[letter] ?? letter);
 };
+const normalizeCompany=(input:unknown)=>String(input??"").toUpperCase().replace(/[«»"'.,()]/g," ").replace(/\b(ООО|АО|ПАО|ЗАО|ОАО)\b/g," ").replace(/\s+/g," ").trim();
 
 const rowContainer = (row: Row) => {
   for (const key of ["Грузовая единица", "Номера грузовых единиц", "Номер грузовой единицы по заказу", "Контейнер", "Номер контейнера", "Импорт"]) {
@@ -111,6 +113,7 @@ export default function Workspace() {
   const [statusModalOpen, setStatusModalOpen] = useState(false);
   const [docStatuses, setDocStatuses] = useState<Record<string,{state:"queued"|"working"|"saved"|"error";text:string}>>({});
   const [kontur, setKontur] = useState<KonturStatus>({configured:false,connected:false,boxId:"",user:null,permissions:[]});
+  const [konturChecking,setKonturChecking]=useState(true);
   const [edoSource,setEdoSource]=useState<Source|null>(null);
   const [edoBusy,setEdoBusy]=useState(false);
   const [edoProgress,setEdoProgress]=useState(0);
@@ -176,7 +179,7 @@ export default function Workspace() {
       if(parameters.get("kontur")==="connected") setMessage("Контур подключён. Можно создавать черновики.");
       if(parameters.get("kontur")==="error") setMessage("Не удалось подключить Контур: "+(parameters.get("message")||"ошибка авторизации"));
       if(parameters.has("kontur")) window.history.replaceState({},document.title,window.location.pathname);
-    }).catch(()=>setKontur({configured:false,connected:false,boxId:"",user:null,permissions:[]}));
+    }).catch(()=>setKontur({configured:false,connected:false,boxId:"",user:null,permissions:[]})).finally(()=>setKonturChecking(false));
   }, []);
 
   const resetSources=async()=>{await clearSourceFiles();setCargoRows([]);setAutoRows([]);setPoints([]);setCargoSource(null);setAutoSource(null);setPointsSource(null);setResults([]);setQuery("");setMessage("Сохранённые реестры удалены. Подключите актуальные файлы.");};
@@ -186,7 +189,8 @@ export default function Workspace() {
   const autoIndex = useMemo(() => {
     const map = new Map<string, Row>();
     const supplementalFields = ["Водитель","ФИО водителя","Телефон водителя","Номер автомашины","Транспортное средство","Номер прицепа"];
-    const operationScore = (row: Row) =>
+    const operationScore = (row: Row,expectedCarrier:string) =>
+      (expectedCarrier&&normalizeCompany(value(row,"Исполнитель","Перевозчик"))===normalizeCompany(expectedCarrier) ? 100 : 0) +
       (value(row,"Водитель","ФИО водителя") ? 8 : 0) +
       (value(row,"Номер автомашины","Транспортное средство") ? 8 : 0) +
       (value(row,"Маршрут") ? 4 : 0) +
@@ -196,18 +200,20 @@ export default function Workspace() {
     autoRows.forEach((row) => {
       const key = rowContainer(row);
       if (!key) return;
+      const expectedCarrier=value(cargoIndex.get(key),"Перевозчик","Исполнитель");
       const selected = map.get(key);
       if (!selected) { map.set(key, {...row}); return; }
-      const preferCurrent = operationScore(row) > operationScore(selected);
+      const preferCurrent = operationScore(row,expectedCarrier) > operationScore(selected,expectedCarrier);
       const preferred = preferCurrent ? {...row} : {...selected};
       const fallback = preferCurrent ? selected : row;
-      supplementalFields.forEach((field) => {
+      const sameCarrier=normalizeCompany(value(preferred,"Исполнитель","Перевозчик"))===normalizeCompany(value(fallback,"Исполнитель","Перевозчик"));
+      if(sameCarrier)supplementalFields.forEach((field) => {
         if (!value(preferred,field) && value(fallback,field)) preferred[field]=fallback[field];
       });
       map.set(key,preferred);
     });
     return map;
-  }, [autoRows]);
+  }, [autoRows,cargoIndex]);
 
   const resolveDeparture = (auto: Row | undefined) => {
     const direct = value(auto, "Адрес места отправления", "Адрес отправления");
@@ -428,8 +434,9 @@ export default function Workspace() {
 
   const kindTitle=(key:string)=>key.endsWith("cargo")?"ЭТрН груз":key.endsWith("order")?"Заявка перевозчику":"ЭТрН порожний";
   const keyContainer=(key:string)=>key.replace(/(cargo|order|empty)$/,"");
-  const tripDocumentSummary=(container:string,ok:boolean,missingCargo:boolean)=>{
-    if(!ok)return {tone:"warning",title:"Недостаточно данных",detail:missingCargo?"Не найден груз":"Не найдена автоперевозка"};
+  const tripDocumentSummary=(container:string,transportReady:boolean,edoReady:boolean,missingCargo:boolean,missingAuto:boolean,edoIssue:string)=>{
+    if(!transportReady)return {tone:"warning",title:"Недостаточно данных",detail:missingCargo?"Не найден груз":missingAuto?"Не найдена автоперевозка":"Не определены данные перевозки"};
+    if(!edoReady)return {tone:"warning",title:"Недостаточно данных",detail:edoIssue||"Не определён ID ЭДО участника"};
     const documents=[{kind:"cargo",title:"ЭТрН на груз"},{kind:"order",title:"Заявка перевозчику"},{kind:"empty",title:"ЭТрН на порожний"}];
     const attempted=documents.map(item=>({...item,state:docStatuses[container+item.kind]?.state})).filter(item=>item.state);
     if(!attempted.length)return {tone:"rowPending",title:"Не сформировано",detail:"Выберите нужный документ"};
@@ -442,13 +449,16 @@ export default function Workspace() {
     if(attempted.length===3&&saved===3)return {tone:"ok",title:"Комплект готов",detail:"Создано 3 из 3"};
     return {tone:"ok",title:"Документ готов",detail:attempted.filter(item=>item.state==="saved").map(item=>item.title).join(", ")};
   };
+  const tmsStatusItems=Object.values(tmsStatuses);
+  const tmsProgressValue=tmsBusy&&tmsStatusItems.length?Math.round(tmsStatusItems.reduce((sum,item)=>sum+(item.state==="saved"||item.state==="error"?100:item.state==="working"?(item.progress??35):0),0)/tmsStatusItems.length):restoreProgress.active?Math.round(restoreProgress.completed/Math.max(1,restoreProgress.total)*100):ready?100:0;
+  const konturProgressValue=edoBusy?edoProgress:kontur.connected?100:0;
 
   return <main className={styles.shell}>
-    <header className={styles.topbar}><div className={styles.logo}>А</div><div><strong>Создание ЭПД</strong><span>локальная версия</span></div><nav><a className={styles.activeTab} href="/workspace">Создание документов</a><a href="/control">Контроль подписания</a><a href="/edo-settings">Настройки ID ЭДО</a></nav><i/><b>{ready ? "База подключена" : "Нужны 2 файла"}</b></header>
+    <header className={styles.topbar}><div className={styles.logo}>А</div><div><strong>Создание ЭПД</strong><span>версия {appPackage.version}</span></div><nav><a className={styles.activeTab} href="/workspace">Создание документов</a><a href="/control">Контроль подписания</a><a href="/edo-settings">Настройки ID ЭДО</a></nav><i/><b>{ready ? "База подключена" : "Нужны 2 файла"}</b></header>
     <section className={styles.content}>
       {(busy||message)&&<div className={styles.notice}>{busy ? "Читаем файл…" : message}</div>}
       <details className={styles.servicePanel}>
-        <summary><span><strong>Служебные данные</strong><small>{kontur.connected?"Контур подключён":"Контур не подключён"} · TMS {ready?"готово":"не загружено"}</small></span><b>Настройки и обновление</b></summary>
+        <summary><span><strong>Служебные данные</strong><small>Сборка v{appPackage.version}</small></span><div className={styles.serviceMeters}><span><b>TMS</b><progress value={tmsProgressValue} max={100}/><em>{tmsBusy||restoreProgress.active?tmsProgressValue+"%":ready?"готово":"нет данных"}</em></span><span><b>Контур</b>{konturChecking?<progress/>:<progress value={konturProgressValue} max={100}/>}<em>{konturChecking?"проверка":edoBusy?edoProgress+"%":kontur.connected?"подключён":"не подключён"}</em></span></div><b>Настройки и обновление</b></summary>
       <section className={styles.konturPanel}>
         <div><b>{kontur.connected?"✓":"К"}</b><span><strong>Контур.Логистика</strong><small>{kontur.connected?(kontur.user?.name||"Пользователь Контур"):kontur.configured?"Требуется вход сотрудника":"Интеграция не настроена на сервере"}</small>{kontur.connected&&kontur.user?.email&&<em>{kontur.user.email}</em>}{kontur.connected&&<em>Разрешено приложению: {kontur.permissions.length?kontur.permissions.join(" · "):"доступ к ящику подтверждён"}</em>}</span></div>
         {!kontur.connected?<button disabled={!kontur.configured} onClick={()=>{window.location.href="/api/kontur/login";}}>{kontur.configured?"Войти через Контур":"Нет настроек API"}</button>:<div><button disabled={edoBusy} onClick={syncEdoFromKontur}>{edoBusy?`Обновляем · ${edoProgress}%`:"Обновить контрагентов"}</button>{edoSource?.updatedAt&&<small>Список обновлён {new Date(edoSource.updatedAt).toLocaleString("ru-RU")}</small>}{edoBusy&&<progress value={edoProgress} max={100}/>}</div>}
@@ -477,9 +487,9 @@ export default function Workspace() {
           const stock = value(cargo,"Контейнерный сток","Инструкция на сдачу порожнего","Перенаправление сдачи порожнего") || value(auto,"Контейнерный сток","Инструкция на сдачу порожнего","Перенаправление сдачи порожнего");
           const clientName=value(cargo,"Клиент")||value(auto,"Клиент")||"—";const consigneeFromTms=value(auto,"Грузополучатель");const consigneeName=consigneeFromTms||clientName;
           const ok = !trip._missingCargo && !trip._missingAuto;
-          const edoState=edoChoices[trip._container];const edoReady=Boolean(edoState&&!edoState.loading&&!edoState.error&&edoState.parties.length&&edoState.parties.every(party=>party.selectedId));const documentsReady=ok&&edoReady;
+          const edoState=edoChoices[trip._container];const edoReady=Boolean(edoState&&!edoState.loading&&!edoState.error&&edoState.parties.length&&edoState.parties.every(party=>party.selectedId));const documentsReady=ok&&edoReady;const unresolvedEdo=edoState?.parties.filter(party=>!party.selectedId)||[];const edoIssue=edoState?.loading?"Проверяем операторов ЭДО":edoState?.error?edoState.error:unresolvedEdo.length?(unresolvedEdo.some(party=>!party.options.length)?"Нет ID ЭДО: ":"Выберите ID ЭДО: ")+[...new Set(unresolvedEdo.map(party=>party.name||party.role))].join(", "):"";
           const konturButton=(kind:"cargo"|"order"|"empty")=>{const status=konturStatuses[trip._container+kind];return <button className={styles.konturButton} disabled={!documentsReady||!kontur.connected||status?.state==="working"} title={!edoReady?"Сначала определите ID ЭДО всех участников":kontur.connected?"Создать черновик в Контур.Логистике":"Сначала подключите Контур"} onClick={()=>sendToKontur(trip,kind)} aria-label="Передать черновик в Контур">↗<small className={status?styles[status.state]:undefined}>{status?.text??"Контур"}</small></button>;};
-          return <tr key={trip._container}><td><strong>{trip._container}</strong></td><td className={styles.partyCell}><span><b>Клиент</b><strong>{clientName}</strong></span><span><b>Грузополучатель</b><strong>{consigneeName}</strong><small>{!consigneeFromTms&&clientName!=="—"?"Подставлен клиент":"Из ТТН / CMR"}</small></span></td><td><strong>{value(auto,"Исполнитель","Партнер","Перевозчик") || '—'}</strong></td><td>{value(auto,"Маршрут") || '—'}</td><td className={styles.tripDates}><span><b>Погрузка</b>{formatTmsDate(value(auto,"Плановая дата отправления"))}</span><span><b>Выгрузка</b>{formatTmsDate(value(auto,"Плановая дата прибытия","Последняя план дата прибытия","ETA (план дата прибытия)"))}</span></td><td>{resolveDeparture(auto)}</td><td>{warehouse || '—'}</td><td>{stock || 'Нужно заполнить'}</td><td><strong>{value(auto,"Водитель") || '—'}</strong><small>{value(auto,"Номер автомашины","Транспортное средство")}</small></td><td><div className={styles.edoChoices}>{(()=>{const state=edoChoices[trip._container];const parties=state?.parties.filter(party=>party.role==="carrier"||party.role==="consignee")||[];if(state?.loading)return <small>Проверяем историю подписей…</small>;if(state?.error)return <small className={styles.edoError}>{state.error}</small>;if(!parties.length)return <span className={styles.edoAutomatic}>Нет данных</span>;return parties.map(party=>{const selected=party.options.find(option=>option.id===party.selectedId);const choiceStatus=edoChoiceStatus[party.key];return <label key={party.role}><span><b>{{consignee:"Грузополучатель",carrier:"Перевозчик"}[party.role]}</b><small className={choiceStatus?.startsWith("Ошибка")?styles.edoError:undefined}>{choiceStatus||(party.selectionSource==="manual"?"Закреплён вручную":party.selectionSource==="history"?"Подтверждён подписью":party.selectedId?"Определён автоматически":"Нужно выбрать")}</small></span>{party.options.length===0?<span className={styles.edoMissing}>Нет в справочнике ЭДО</span>:party.options.length>1&&party.selectionSource==="unresolved"&&<select value={party.selectedId} onChange={event=>{const participantId=event.currentTarget.value;if(participantId)void saveEdoChoice(party,participantId);}}><option value="">Выберите оператора</option>{party.options.map(option=><option key={option.id} value={option.id}>{option.operator} — {option.id}</option>)}</select>}{selected&&<div className={styles.edoOperator}><strong>{selected.operator}</strong><small title={selected.id}>{selected.id}</small></div>}</label>});})()}</div></td><td><div className={styles.docActions}><button disabled={!documentsReady || Boolean(generating)} onClick={() => generateDocument(trip,"cargo")}><b className={styles.documentIcon}>Г</b><span>ЭТрН</span><small className={styles[docStatuses[trip._container+"cargo"]?.state]}>{docStatuses[trip._container+"cargo"]?.text ?? "Не сформирован"}</small></button>{konturButton("cargo")}<button disabled={!documentsReady || Boolean(generating)} onClick={() => generateDocument(trip,"order")}><b className={styles.documentIcon}>З</b><span>ЭЗЗ</span><small className={styles[docStatuses[trip._container+"order"]?.state]}>{docStatuses[trip._container+"order"]?.text ?? "Не сформирована"}</small></button>{konturButton("order")}<button disabled={!documentsReady || Boolean(generating)} onClick={() => generateDocument(trip,"empty")}><b className={styles.documentIcon}>П</b><span>ЭТрН пор.</span><small className={styles[docStatuses[trip._container+"empty"]?.state]}>{docStatuses[trip._container+"empty"]?.text ?? "Не сформирован"}</small></button>{konturButton("empty")}</div></td><td>{(()=>{const summary=tripDocumentSummary(trip._container,documentsReady,Boolean(trip._missingCargo));return <span className={styles[summary.tone]}><strong>{summary.title}</strong><small>{summary.detail}</small></span>;})()}</td></tr>;
+          return <tr key={trip._container}><td><strong>{trip._container}</strong></td><td className={styles.partyCell}><span><b>Клиент</b><strong>{clientName}</strong></span><span><b>Грузополучатель</b><strong>{consigneeName}</strong><small>{!consigneeFromTms&&clientName!=="—"?"Подставлен клиент":"Из ТТН / CMR"}</small></span></td><td><strong>{value(auto,"Исполнитель","Партнер","Перевозчик") || '—'}</strong></td><td>{value(auto,"Маршрут") || '—'}</td><td className={styles.tripDates}><span><b>Погрузка</b>{formatTmsDate(value(auto,"Плановая дата отправления"))}</span><span><b>Выгрузка</b>{formatTmsDate(value(auto,"Плановая дата прибытия","Последняя план дата прибытия","ETA (план дата прибытия)"))}</span></td><td>{resolveDeparture(auto)}</td><td>{warehouse || '—'}</td><td>{stock || 'Нужно заполнить'}</td><td><strong>{value(auto,"Водитель") || '—'}</strong><small>{value(auto,"Номер автомашины","Транспортное средство")}</small></td><td><div className={styles.edoChoices}>{(()=>{const state=edoChoices[trip._container];const parties=state?.parties.filter(party=>party.role==="carrier"||party.role==="consignee")||[];if(state?.loading)return <small>Проверяем историю подписей…</small>;if(state?.error)return <small className={styles.edoError}>{state.error}</small>;if(!parties.length)return <span className={styles.edoAutomatic}>Нет данных</span>;return parties.map(party=>{const selected=party.options.find(option=>option.id===party.selectedId);const choiceStatus=edoChoiceStatus[party.key];return <label key={party.role}><span><b>{{consignee:"Грузополучатель",carrier:"Перевозчик"}[party.role]}</b><small className={choiceStatus?.startsWith("Ошибка")?styles.edoError:undefined}>{choiceStatus||(party.selectionSource==="manual"?"Закреплён вручную":party.selectionSource==="history"?"Подтверждён подписью":party.selectedId?"Определён автоматически":"Нужно выбрать")}</small></span>{party.options.length===0?<span className={styles.edoMissing}>Нет в справочнике ЭДО</span>:party.options.length>1&&party.selectionSource==="unresolved"&&<select value={party.selectedId} onChange={event=>{const participantId=event.currentTarget.value;if(participantId)void saveEdoChoice(party,participantId);}}><option value="">Выберите оператора</option>{party.options.map(option=><option key={option.id} value={option.id}>{option.operator} — {option.id}</option>)}</select>}{selected&&<div className={styles.edoOperator}><strong>{selected.operator}</strong><small title={selected.id}>{selected.id}</small></div>}</label>});})()}</div></td><td><div className={styles.docActions}><button disabled={!documentsReady || Boolean(generating)} onClick={() => generateDocument(trip,"cargo")}><b className={styles.documentIcon}>Г</b><span>ЭТрН</span><small className={styles[docStatuses[trip._container+"cargo"]?.state]}>{docStatuses[trip._container+"cargo"]?.text ?? "Не сформирован"}</small></button>{konturButton("cargo")}<button disabled={!documentsReady || Boolean(generating)} onClick={() => generateDocument(trip,"order")}><b className={styles.documentIcon}>З</b><span>ЭЗЗ</span><small className={styles[docStatuses[trip._container+"order"]?.state]}>{docStatuses[trip._container+"order"]?.text ?? "Не сформирована"}</small></button>{konturButton("order")}<button disabled={!documentsReady || Boolean(generating)} onClick={() => generateDocument(trip,"empty")}><b className={styles.documentIcon}>П</b><span>ЭТрН пор.</span><small className={styles[docStatuses[trip._container+"empty"]?.state]}>{docStatuses[trip._container+"empty"]?.text ?? "Не сформирован"}</small></button>{konturButton("empty")}</div></td><td>{(()=>{const summary=tripDocumentSummary(trip._container,ok,edoReady,Boolean(trip._missingCargo),Boolean(trip._missingAuto),edoIssue);return <span className={styles[summary.tone]}><strong>{summary.title}</strong><small>{summary.detail}</small></span>;})()}</td></tr>;
         })}</tbody></table></div></section></>}
       </>}
     </section>
