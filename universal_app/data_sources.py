@@ -162,6 +162,15 @@ class Catalogs:
                 return unique_ids[0]
         return ""
 
+    def kpp_for_edo(self, inn: str, participant_id: str) -> str:
+        if not clean(inn) or not clean(participant_id):
+            return ''
+        values = {clean(row.get('КПП')) for row in self.edo
+                  if clean(row.get('ИНН')) == clean(inn)
+                  and clean(row.get('Идентификатор участника ЭДО')) == clean(participant_id)
+                  and re.fullmatch(r'\d{9}', clean(row.get('КПП')))}
+        return next(iter(values)) if len(values) == 1 else ''
+
     def edo_options(self, company: dict | None) -> list[dict]:
         if not company:
             return []
