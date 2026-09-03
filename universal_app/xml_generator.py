@@ -10,11 +10,12 @@ from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
 from data_sources import Catalogs, clean, normalize_name, value
+from address_xml import append_gar, complete_gar, known_gar
 
 TAGLEX = {
     "name": 'ООО "ТАГЛЕКС"', "inn": "7734515704", "kpp": "772601001",
     "phone": "+7 (495) 775-07-39",
-    "address": "115191, Москва, переулок Гамсоновский, дом 5, корпус 2, квартира V",
+    "address": "115191, Москва, переулок Гамсоновский, дом 5, строение 2",
     "edo": "2BM-7734515704-771001001-201411210937449434253",
 }
 
@@ -39,7 +40,7 @@ KNOWN_POINT_PHONES = (
 
 ADDRESS_PART_PATTERNS = {
     "Индекс": r"(?<!\d)(\d{6})(?!\d)",
-    "Дом": r"(?:^|[,;]\s*|\s)(?:д(?:ом)?\.?)(?!\w)\s*([\w/-]+)",
+    "Дом": r"(?:^|[,;]\s*|\s)(?:д(?:ом)?\.?)(?!\w)\s*(?:№\s*)?([\w/-]+)",
     "Корпус": r"(?:^|[,;]\s*|\s)(?:корп(?:ус)?\.?|к\.?|стр(?:оение)?\.?)(?!\w)\s*([\w.\-/ ]+?)(?=\s*[,;]|$)",
     "Кварт": r"(?:^|[,;]\s*|\s)(?:кв(?:артира)?\.?)(?!\w)\s*([\w\-/]+)",
 }
@@ -184,7 +185,7 @@ def address_attributes(text: str) -> dict:
             attrs[key] = clean(match.group(1))
 
     lowered = text.lower()
-    region_code = next((code for names, code in REGION_CODES if any(name in lowered for name in names)), "")
+    region_code = next((code for part in re.split(r'[,;]', lowered) for names, code in REGION_CODES if any(name in part for name in names)), "")
     if region_code:
         attrs["КодРегион"] = region_code
 
@@ -214,10 +215,20 @@ def address_attributes(text: str) -> dict:
         street = street_candidates[-1]
     else:
         street = re.sub(r"(?<!\d)\d{6}(?!\d)", "", text).strip(" ,")
-    attrs["Улица"] = compact_address(text) or "Адрес уточняется"
-    attrs.pop("Дом", None)
-    attrs.pop("Корпус", None)
-    attrs.pop("Кварт", None)
+    street_part = next((part for part in parts if re.search(r'(?:^|\s)(?:ул(?:ица)?\.?|ш(?:оссе)?\.?|пр-кт|проспект|пр-д|проезд|пер(?:еулок)?\.?|квартал)(?:\s|$)', part, re.I)), '')
+    if street_part and len(street_part) <= 50:
+        attrs['Улица'] = street_part
+        suffix_city = next((part for part in parts if re.search(r'\sг\.?$', part, re.I)), '')
+        if suffix_city and 'Город' not in attrs:
+            attrs['Город'] = re.sub(r'\sг\.?$', '', suffix_city, flags=re.I)[:50]
+        locality = next((part for part in parts if re.match(r'^(?:село|деревня|пос[её]лок|п\.)\s', part, re.I)), '')
+        if locality:
+            attrs['НаселПункт'] = locality[:50]
+        extras = re.findall(r'(?:^|[,;]\s*)(?:корп(?:ус)?\.?|стр(?:оение)?\.?|лит(?:ера)?\.?)\s*[\w/-]+', text, re.I)
+        if extras:
+            attrs['Корпус'] = ', '.join(x.strip(' ,;') for x in extras)[:20]
+    else:
+        attrs['Улица'] = compact_address(text) or 'Адрес уточняется'
 
     # Индекс обычно приходит в адресе точки. Для известных адресов без
     # индекса используем адресный справочник, а не индекс юридического лица.
@@ -235,12 +246,8 @@ def _set_address(wrapper: ET.Element | None, text: str, child_name: str = "Ад�
         return
     for child in list(wrapper):
         wrapper.remove(child)
-    if gar and clean(gar.get("FiasId")) and clean(gar.get("RegionCode")):
-        attrs = {"ИдНом": clean(gar["FiasId"])}
-        if clean(gar.get("ZipCode")):
-            attrs["Индекс"] = clean(gar["ZipCode"])
-        node = ET.SubElement(wrapper, "АдрФИАС", attrs)
-        ET.SubElement(node, "Регион").text = clean(gar["RegionCode"])
+    if complete_gar(text, gar):
+        append_gar(wrapper, gar)
         return
     ET.SubElement(wrapper, child_name, address_attributes(text))
 
@@ -255,7 +262,7 @@ def _set_legal(node: ET.Element | None, data: dict):
             legal.set("КПП", data["kpp"])
     address = node.find(".//Адрес")
     if address is not None:
-        _set_address(address, data.get("address", ""))
+        _set_address(address, data.get("address", ""), gar=data.get('gar'))
     contact = node.find(".//Контакт")
     contact_tag = "Контакт"
     if contact is None:
@@ -445,6 +452,7 @@ class Generator:
             inn = clean((point or {}).get("ИНН"))
             company = self.catalogs.company(inn=inn) if inn else None
             result = party(company, clean((point or {}).get("Название")))
+            result["inn"] = result.get("inn") or inn
             if point:
                 result["address"] = point_address(point, result.get("address"))
                 result["phone"] = normalize_phone(point.get("Номер телефона")) or known_point_phone(point) or result.get("phone", "")
@@ -497,7 +505,14 @@ class Generator:
             "stock": stock,
         }
 
+    def fill_missing_kpp(self, ctx):
+        for role in ('client', 'consignee', 'carrier'):
+            data = ctx.get(role) or {}
+            if not clean(data.get('kpp')):
+                data['kpp'] = self.catalogs.kpp_for_edo(data.get('inn', ''), ctx.get(role + '_edo', ''))
+
     def etrn(self, ctx: dict, empty: bool = False) -> tuple[str, bytes]:
+        self.fill_missing_kpp(ctx)
         root = copy.deepcopy(self.etrn_template)
         now = datetime.now()
         consignee = TAGLEX if empty else ctx["consignee"]
@@ -618,6 +633,7 @@ class Generator:
         return file_id + ".xml", _serialize(root)
 
     def ezz(self, ctx: dict) -> tuple[str, bytes]:
+        self.fill_missing_kpp(ctx)
         root = copy.deepcopy(self.ezz_template)
         now = datetime.now()
         file_id = f"ON_ZAKZVGO_{ctx['carrier_edo']}_{TAGLEX['edo']}_0_{ctx['date']:%Y%m%d}_{uuid.uuid4()}"
@@ -628,6 +644,12 @@ class Generator:
         doc.set("ВрИнфГО", now.strftime("%H:%M:%S"))
         info = doc.find("СодИнфГО")
         contract = root.find(".//ДогОргПрвз")
+        if contract is not None:
+            for stale in list(contract.findall('ИдРекСост')):
+                contract.remove(stale)
+            for inn in (ctx['carrier']['inn'], TAGLEX['inn']):
+                if clean(inn):
+                    ET.SubElement(ET.SubElement(contract, 'ИдРекСост'), 'ИННЮЛ').text = clean(inn)
         selected_contract = ctx.get("carrier_contract")
         if contract is not None:
             if selected_contract:
@@ -643,20 +665,32 @@ class Generator:
         info.set("НомЗак", ctx["order_number"])
         info.set("ДатаЗак", ctx["order_date"])
         shipper = info.find("СвГО")
-        _set_legal(shipper, TAGLEX)
+        _set_legal(shipper, {**TAGLEX, 'gar': known_gar(TAGLEX['address'])})
         _set_ezz_shipper_phone(shipper, TAGLEX["phone"])
         _set_legal(info.find("СвПрв"), ctx["carrier"])
         start = ctx["planned_departure_datetime"]
         finish = ctx["planned_arrival_datetime"]
         point = info.find("ПунктПод")
         point.set("ДатВрПод", _epd_datetime(start))
-        gar_addresses = ctx.get("gar_addresses") or {}
+        gar_addresses = dict(ctx.get("gar_addresses") or {})
+        for role in ('loading', 'delivery'):
+            gar_addresses[role] = known_gar(ctx[role]) or gar_addresses.get(role)
         _set_address(point.find("АдрПунктПод/Адрес"), ctx["loading"], gar=gar_addresses.get("loading"))
         route_points = info.findall("АдрПункт")
         route_points[0].set("ДатВрОпер", _epd_datetime(start))
         route_points[1].set("ДатВрОпер", _epd_datetime(finish))
         _set_address(route_points[0].find("АдресПункт/Адрес"), ctx["loading"], gar=gar_addresses.get("loading"))
         _set_address(route_points[1].find("АдресПункт/Адрес"), ctx["delivery"], gar=gar_addresses.get("delivery"))
+        # Никогда не оставляем владельца из образца XML (Янино).
+        for route_point in route_points:
+            for owner in list(route_point.findall("ОргВладИнфр")):
+                route_point.remove(owner)
+        loading_owner = ctx.get("loading_owner") or {}
+        if clean(loading_owner.get("name")) and clean(loading_owner.get("inn")):
+            ET.SubElement(route_points[0], "ОргВладИнфр", {
+                "НаимВладИнфр": clean(loading_owner["name"]),
+                "ИННВладИнфр": clean(loading_owner["inn"]),
+            })
         cargo = info.find("ОпГруз")
         cargo.set("НаимГруз", f"Контейнер {ctx['container']}")
         cargo.find("МасГруз").set("МасБрутЗнач", ctx["weight"])

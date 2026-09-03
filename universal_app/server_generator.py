@@ -39,6 +39,8 @@ class Generator(BaseGenerator):
     @staticmethod
     def warnings(ctx, empty=False, ezz=False):
         warnings = []
+        if ezz and (not ctx.get("loading_owner", {}).get("inn") or not ctx.get("loading_owner", {}).get("name")):
+            warnings.append("В справочнике не заполнены название или ИНН владельца точки погрузки. Заполните сведения о владельце вручную в заявке перед подписанием.")
         if not ezz:
             if not ctx.get("client", {}).get("phone"):
                 warnings.append("В справочнике организаций не заполнен телефон заказчика.")

@@ -157,8 +157,8 @@ async function diadocJson(pathname,accessToken,options={}){
 }
 const isCompleteGarAddress=(address,result)=>{
   if(!result?.FiasId||!result?.RegionCode)return false;
-  const needsHouse=/\b(?:д(?:ом)?|вл(?:адение)?|стр(?:оение)?)\.?\s*\d/iu.test(address);
-  const needsStreet=/\b(?:ул(?:ица)?|ш(?:оссе)?|проспект|проезд|пер(?:еулок)?)\.?\s/iu.test(address);
+  const needsHouse=/(?:^|[\s,])(?:д(?:ом)?|вл(?:адение)?|стр(?:оение)?)\.?\s*(?:№\s*)?\d/iu.test(address);
+  const needsStreet=/(?:^|[\s,])(?:ул(?:ица)?|ш(?:оссе)?|пр-кт|проспект|проезд|пер(?:еулок)?)\.?\s/iu.test(address);
   const hasHouse=Boolean(result.Garhouse?.Number);
   const hasStreet=Boolean(result.Street?.Name||result.PlanningStructure?.Name);
   return (!needsHouse||hasHouse)&&(!needsStreet||hasStreet);
