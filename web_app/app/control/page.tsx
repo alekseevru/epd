@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import styles from "./control.module.css";
+import appPackage from "../../package.json";
 
 type ControlItem={
   id:string;documentType:"ЭТрН"|"Заявка"|"Поручение экспедитору";workflowGroup:"signByUs"|"waitingCounterparty"|null;number:string;container:string;client:string;carrier:string;consignee:string;
@@ -30,7 +31,7 @@ export default function ControlPage(){
   const regularItems=items.filter(item=>item.documentType!=="Поручение экспедитору");
   const forwardingItems=items.filter(item=>item.documentType==="Поручение экспедитору");
   return <main className={styles.shell}>
-    <header className={styles.topbar}><div className={styles.logo}>А</div><div><strong>Создание ЭПД</strong><span>локальная версия</span></div><nav><a href="/workspace">Создание документов</a><a className={styles.activeTab} href="/control">Контроль подписания</a></nav><i/><b>{data?.connected?"Контур подключён":"Предварительный режим"}</b></header>
+    <header className={styles.topbar}><div className={styles.logo}>А</div><div><strong>Создание ЭПД</strong><span>версия {appPackage.version}</span></div><nav><a href="/workspace">Создание документов</a><a className={styles.activeTab} href="/control">Контроль подписания</a></nav><i/><b>{data?.connected?"Контур подключён":"Предварительный режим"}</b></header>
     <section className={styles.content}>
       <header className={styles.heading}><div><small>КОНТРОЛЬ ДОКУМЕНТООБОРОТА</small><h1>Неподписанные перевозочные документы</h1><p>ЭТрН, заявки и поручения экспедитору, по которым ожидается следующий титул или подпись.</p></div><button onClick={()=>load(true)} disabled={loading}>{loading?"Проверяем…":"Обновить статусы"}</button></header>
       {error&&<div className={styles.error}><span>{error}</span>{error.includes("Контур")&&<a style={{marginLeft:"auto",color:"#295d72",fontWeight:800}} href="/api/kontur/login?returnTo=/control">Войти через Контур</a>}</div>}
