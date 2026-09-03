@@ -10,6 +10,7 @@ import { syncTms, contractRowsToCatalog } from "./tms-sync.mjs";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const appPackage = JSON.parse(fs.readFileSync(path.join(root,"package.json"),"utf8"));
+const appBuild = process.env.APP_BUILD || process.env.GIT_COMMIT || spawnSync("git",["rev-parse","--short","HEAD"],{cwd:path.join(root,".."),encoding:"utf8"}).stdout?.trim() || "";
 const localEnvFile = path.join(root,"..",".env");
 if (fs.existsSync(localEnvFile) && typeof process.loadEnvFile === "function") process.loadEnvFile(localEnvFile);
 const clientRoot = path.join(root, "dist", "client");
@@ -389,7 +390,7 @@ const server = http.createServer((request, response) => {
   }
   if(request.method==="GET"&&url.pathname==="/api/version"){
     response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});
-    response.end(JSON.stringify({version:appPackage.version,build:process.env.APP_BUILD||process.env.GIT_COMMIT||""}));return;
+    response.end(JSON.stringify({version:appPackage.version,build:appBuild}));return;
   }
   if (request.method === "GET" && url.pathname === "/api/tms-status") {
     const configured=Boolean((process.env.TMS_LOGIN&&process.env.TMS_PASSWORD)||fs.existsSync(credentialsFile));
