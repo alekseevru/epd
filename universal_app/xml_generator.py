@@ -146,6 +146,7 @@ def address_attributes(text: str) -> dict:
     lowered = text.lower()
     region_codes = (
         (("санкт-петербург", "спб"), "78"),
+        (("электроугл",), "50"),
         (("москва",), "77"),
         (("московск",), "50"),
         (("ленинградск",), "47"),
@@ -370,9 +371,7 @@ class Generator:
     def context(self, row: dict, trip_date: date, user: str, stock: dict | None = None) -> dict:
         container = clean(row["_container"])
         client_name = clean(value(row, "Клиент", "Заказчик"))
-        client_key = normalize_name(client_name)
-        use_auto_consignee = client_key not in {normalize_name("АГРЛ"), normalize_name("АГМ")}
-        explicit_consignee = clean(value(row, "Грузополучатель")) if use_auto_consignee else ""
+        explicit_consignee = clean(value(row, "Грузополучатель"))
         consignee_text = re.split(r"\s+по\s+поручению\b", explicit_consignee, maxsplit=1, flags=re.IGNORECASE)[0]
         consignee_inn_match = re.search(r"\bИНН\s*[:№-]?\s*(\d{10}|\d{12})\b", consignee_text, flags=re.IGNORECASE)
         consignee_inn = consignee_inn_match.group(1) if consignee_inn_match else ""
@@ -397,6 +396,11 @@ class Generator:
         delivery_point = self.catalogs.point(delivery_name)
 
         def point_address(point, fallback):
+            if normalize_name(fallback) == normalize_name("Электроугли"):
+                return "142461, Московская область, городской округ Богородский, территория Носовихинское шоссе, 26-й километр, д. 1"
+            point_name = normalize_name(clean((point or {}).get("Название")) or fallback)
+            if point_name == normalize_name("АГМ склад Шушары"):
+                return "196657, Санкт-Петербург, посёлок Шушары, ул. Автозаводская, д. 2, лит. А"
             address = clean((point or {}).get("Адрес на русском языке") or (point or {}).get("Адрес") or fallback)
             postal_code = clean((point or {}).get("Индекс"))
             if postal_code and re.fullmatch(r"\d{6}", postal_code) and not re.search(r"(?<!\d)\d{6}(?!\d)", address):

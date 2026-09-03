@@ -29,7 +29,7 @@ const fetchWithTimeout=async(input:RequestInfo|URL,init:RequestInit,timeoutMs:nu
   const controller=new AbortController(); const timeout=window.setTimeout(()=>controller.abort(),timeoutMs);
   try{return await fetch(input,{...init,signal:controller.signal});}finally{window.clearTimeout(timeout);}
 };
-type DirectoryHandle = { name:string; getDirectoryHandle:(name:string,options:{create:boolean})=>Promise<DirectoryHandle>; getFileHandle:(name:string,options:{create:boolean})=>Promise<{createWritable:()=>Promise<{write:(data:Blob)=>Promise<void>;close:()=>Promise<void>}>}> };
+type DirectoryHandle = { name:string; requestPermission?:(options:{mode:"readwrite"})=>Promise<"granted"|"denied"|"prompt">; getDirectoryHandle:(name:string,options:{create:boolean})=>Promise<DirectoryHandle>; getFileHandle:(name:string,options:{create:boolean})=>Promise<{createWritable:()=>Promise<{write:(data:Blob)=>Promise<void>;close:()=>Promise<void>}>}> };
 
 const openSourceDb = () => new Promise<IDBDatabase>((resolve,reject) => {
   const request=indexedDB.open("agr-local-sources",1);
@@ -327,6 +327,15 @@ export default function Workspace() {
     try { const handle = await picker(); outputRef.current = handle; setOutputFolder(handle.name); setMessage("Папка выбрана: " + handle.name); } catch { /* окно закрыто */ }
   };
 
+  const ensureOutputFolderAccess = async () => {
+    if (!outputRef.current) { await chooseOutputFolder(); }
+    const handle=outputRef.current;
+    if (!handle) return null;
+    if (handle.requestPermission && await handle.requestPermission({mode:"readwrite"}) !== "granted") {
+      setMessage("Доступ к папке не предоставлен. Выберите папку повторно."); return null;
+    }
+    return handle;
+  };
   const prepareDocument = async (trip: Trip, kind: "cargo" | "empty" | "order") => {
     if (!employee.trim()) throw new Error("Укажите сотрудника, который формирует документ");
     const row = { ...(trip._cargo ?? {}), ...(trip._auto ?? {}) };
@@ -418,10 +427,10 @@ export default function Workspace() {
   const generateAll = async () => {
     const readyTrips = results.filter((trip) => !trip._missingCargo && !trip._missingAuto);
     if (!readyTrips.length) return setMessage("Нет готовых перевозок для формирования");
-    if (!outputRef.current) { await chooseOutputFolder(); if (!outputRef.current) return; }
+    const outputFolderHandle=await ensureOutputFolderAccess(); if(!outputFolderHandle)return;
     setStatusModalOpen(true);
     containerFoldersRef.current={};
-    try { for(const trip of readyTrips) containerFoldersRef.current[trip._container]=await outputRef.current!.getDirectoryHandle(trip._container,{create:true}); } catch(error) { const text=error instanceof Error?error.message:"Не удалось создать папки контейнеров"; setMessage(text); setGenerating(""); return; }
+    try { for(const trip of readyTrips) containerFoldersRef.current[trip._container]=await outputFolderHandle.getDirectoryHandle(trip._container,{create:true}); } catch(error) { const text=error instanceof Error?error.message:"Не удалось создать папки контейнеров"; setMessage(text); setGenerating(""); return; }
     const initial:Record<string,{state:"queued";text:string}>={}; readyTrips.forEach((trip)=>["cargo","order","empty"].forEach((kind)=>{initial[trip._container+kind]={state:"queued",text:"В очереди"};})); setDocStatuses(initial);
     setGenerating("all"); let done = 0; let failed = 0; const total = readyTrips.length * 3;
     for (const trip of readyTrips) for (const kind of ["cargo","order","empty"] as const) {
@@ -481,7 +490,7 @@ export default function Workspace() {
 
       {ready && <>
         <section className={styles.search}><label><strong>Номера контейнеров</strong><textarea value={query} onChange={(event) => setQuery(event.target.value)} placeholder={'WEDU8636223\nTGBU5962912'}/></label><button onClick={search}>Найти перевозки →</button></section>
-        {results.length > 0 && <><section className={styles.bulkBar}><div><strong>Формирование документов</strong><small>{outputFolder ? "Папка: " + outputFolder : "Папка не выбрана — XML будет скачан в папку «Загрузки»"}</small></div><label className={styles.employeeField}><span>Сотрудник для XML</span><input value={employee} onChange={event=>setEmployee(event.target.value)} placeholder="Фамилия Имя Отчество"/><small>Будет указан работником погрузки и подписантом</small></label><button className={styles.folderButton} onClick={chooseOutputFolder}>Выбрать папку</button><button className={styles.bulkButton} disabled={Boolean(generating)||results.some(trip=>{const state=edoChoices[trip._container];return !state||state.loading||Boolean(state.error)||!state.parties.length||state.parties.some(party=>!party.selectedId);})} onClick={generateAll}>{generating === "all" ? (bulkProgress || "Формируем…") : "Создать все документы"}</button></section><section className={styles.results}><div className={styles.tableWrap}><table><thead><tr><th>Контейнер</th><th>Клиент / грузополучатель</th><th>Перевозчик</th><th>Маршрут</th><th>Погрузка / выгрузка</th><th>Адрес отправления</th><th>Склад клиента</th><th>Контейнерный сток</th><th>Водитель и ТС</th><th>Оператор ЭДО</th><th>Документы</th><th>Статус</th></tr></thead><tbody>{results.map((trip) => {
+        {results.length > 0 && <><section className={styles.bulkBar}><div><strong>Скачать XML документов</strong><small>{outputFolder ? "Папка: " + outputFolder : "Выберите папку для сохранения XML. Передача в Контур выполняется отдельными кнопками «Контур»."}</small></div><label className={styles.employeeField}><span>Сотрудник для XML</span><input value={employee} onChange={event=>setEmployee(event.target.value)} placeholder="Фамилия Имя Отчество"/><small>Будет указан работником погрузки и подписантом</small></label><button className={styles.folderButton} onClick={chooseOutputFolder}>Выбрать папку</button><button className={styles.bulkButton} disabled={Boolean(generating)||results.some(trip=>{const state=edoChoices[trip._container];return !state||state.loading||Boolean(state.error)||!state.parties.length||state.parties.some(party=>!party.selectedId);})} onClick={generateAll}>{generating === "all" ? (bulkProgress || "Формируем…") : "Скачать все XML"}</button></section><section className={styles.results}><div className={styles.tableWrap}><table><thead><tr><th>Контейнер</th><th>Клиент / грузополучатель</th><th>Перевозчик</th><th>Маршрут</th><th>Погрузка / выгрузка</th><th>Адрес отправления</th><th>Склад клиента</th><th>Контейнерный сток</th><th>Водитель и ТС</th><th>Оператор ЭДО</th><th>Документы</th><th>Статус</th></tr></thead><tbody>{results.map((trip) => {
           const cargo = trip._cargo; const auto = trip._auto;
           const warehouse = value(cargo,"Место доставки на склад","Место доставки груза (Маршрут заказа)","Адрес доставки","Место прибытия") || value(auto,"Место прибытия");
           const stock = value(cargo,"Контейнерный сток","Инструкция на сдачу порожнего","Перенаправление сдачи порожнего") || value(auto,"Контейнерный сток","Инструкция на сдачу порожнего","Перенаправление сдачи порожнего");
