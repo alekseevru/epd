@@ -29,7 +29,7 @@ class Generator(BaseGenerator):
             missing.append("ID ЭДО заказчика")
         if not ctx.get("user"):
             missing.append("сотрудник, осуществляющий погрузку")
-        if not ctx["truck_number"]:
+        if not ezz and not ctx["truck_number"]:
             missing.append("автомобиль")
         if empty and not ctx["stock"]:
             missing.append("контейнерный сток")
