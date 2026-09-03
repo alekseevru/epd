@@ -155,13 +155,25 @@ async function diadocJson(pathname,accessToken,options={}){
   const text=await response.text();let result={};try{result=JSON.parse(text);}catch{result={message:text};}
   if(!response.ok)throw new Error(result.message||result.error_description||result.error||`Диадок вернул HTTP ${response.status}`);return result;
 }
+const isCompleteGarAddress=(address,result)=>{
+  if(!result?.FiasId||!result?.RegionCode)return false;
+  const needsHouse=/\b(?:д(?:ом)?|вл(?:адение)?|стр(?:оение)?)\.?\s*\d/iu.test(address);
+  const needsStreet=/\b(?:ул(?:ица)?|ш(?:оссе)?|проспект|проезд|пер(?:еулок)?)\.?\s/iu.test(address);
+  const hasHouse=Boolean(result.Garhouse?.Number);
+  const hasStreet=Boolean(result.Street?.Name||result.PlanningStructure?.Name);
+  return (!needsHouse||hasHouse)&&(!needsStreet||hasStreet);
+};
 async function resolveGarAddress(address){
   const key=normalizeAddressKey(address);if(!key)return null;
-  const cache=loadGarAddressCache();if(Object.hasOwn(cache,key))return cache[key];
+  const cache=loadGarAddressCache();
+  if(Object.hasOwn(cache,key)){
+    if(isCompleteGarAddress(address,cache[key]))return cache[key];
+    delete cache[key];
+  }
   try{
     const accessToken=await getKonturAccessToken();
     const result=await diadocJson(`/V1/ParseGarAddress?address=${encodeURIComponent(address)}&isAdministrativeDivision=false`,accessToken);
-    const resolved=result&&result.FiasId&&result.RegionCode?result:null;
+    const resolved=isCompleteGarAddress(address,result)?result:null;
     cache[key]=resolved;saveGarAddressCache();return resolved;
   }catch{return null;}
 }

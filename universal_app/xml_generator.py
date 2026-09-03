@@ -13,7 +13,7 @@ from data_sources import Catalogs, clean, normalize_name, value
 
 TAGLEX = {
     "name": 'ООО "ТАГЛЕКС"', "inn": "7734515704", "kpp": "772601001",
-    "phone": "+74957750739",
+    "phone": "+7 (495) 775-07-39",
     "address": "115191, Москва, переулок Гамсоновский, дом 5, корпус 2, квартира V",
     "edo": "2BM-7734515704-771001001-201411210937449434253",
 }
@@ -392,6 +392,9 @@ class Generator:
         ]
         loading_name = route_names[0] if route_names else clean(value(row, "Место отправления", "Последняя точка прибытия"))
         delivery_name = route_names[-1] if len(route_names) > 1 else clean(value(row, "Место прибытия", "Последняя точка прибытия", "Места дислокации грузовых единиц"))
+        if not explicit_consignee and normalize_name(delivery_name) == normalize_name("АГМ склад Шушары"):
+            consignee_name = "АГМ"
+            consignee_company = self.catalogs.company(consignee_name)
         loading_point = self.catalogs.point(loading_name)
         delivery_point = self.catalogs.point(delivery_name)
 
