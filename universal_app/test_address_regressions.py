@@ -96,6 +96,10 @@ class AddressRegressions(unittest.TestCase):
             "loading": "г. Москва",
             "delivery": "г. Санкт-Петербург",
             "services": ["Организация перевозки", "Погрузочные" + chr(0xDC98) + " работы"],
+            "seals": "123456, ABC-7",
+            "seal_numbers": ["123456", "ABC-7"],
+            "cargo_name": "Абсорбент",
+            "order_shipper": {"name": "Shandong Nuoer Biological Technology Co.", "foreign": True},
             "client": party_data,
             "client_edo": "client-edo",
             "client_contract": {"title": "Договор", "number": "1", "date": "2026-09-01"},
@@ -108,7 +112,16 @@ class AddressRegressions(unittest.TestCase):
         self.assertEqual(root.findtext(".//CargoNumber"), "1")
         self.assertEqual(root.findtext(".//CargoOriginCountryInfo/Country"), "643")
         container = root.find(".//TransportContainer")
-        self.assertEqual(container.attrib, {"ContainerOrderNumber": "1", "IsContainerProvided": "2"})
+        self.assertEqual(container.get("ContainerOrderNumber"), "1")
+        self.assertEqual(container.get("IsContainerProvided"), "1")
+        self.assertEqual(container.get("TotalGrossWeight"), "1000")
+        self.assertEqual(container.get("SealCount"), "1")
+        self.assertEqual(container.findtext("IntContainerId"), "XYZU4002173")
+        self.assertEqual(container.findtext("SealNumbers/SealNumber"), "123456")
+        self.assertEqual(root.find(".//Shipper/OrganizationDetails").get("OrgType"), "4")
+        self.assertEqual(root.find(".//Shipper/OrganizationDetails").get("StatusId"), "LegalEntity")
+        self.assertEqual(root.find(".//ItemDescription").get("Name"), "Абсорбент")
+        self.assertEqual(root.find(".//ForwarderInfo/OrganizationDetails/Address/RussianAddress").get("OtherInfo"), TAGLEX["address"])
         self.assertEqual(
             [node.get("ServiceName") for node in root.findall(".//LogisticsServiceInfo")],
             ["Организация перевозки", "Погрузочные работы"],

@@ -79,6 +79,16 @@ const cargoOrderFieldCandidates=[
   "ORDER_CODE",
   "ID_ORDER",
 ];
+const cargoOptionalFieldCandidates={
+  "Грузоотправитель из заказа":[
+    "DOC_PARENT_ORDER_COMPANY_SHIPPER_NAME","ORDER_COMPANY_SHIPPER_NAME",
+    "DOC_PARENT_ORDER_COMPANY_CONSIGNOR_NAME","ORDER_COMPANY_CONSIGNOR_NAME",
+    "DOC_PARENT_ORDER_COMPANY_SENDER_NAME","ORDER_COMPANY_SENDER_NAME",
+  ],
+  "Наименование груза":[
+    "DOC_PARENT_ORDER_CARGO_NAME","ORDER_CARGO_NAME","ORDER_NAME_CARGO","CARGO_NAME","GOODS_NAME",
+  ],
+};
 const warehousePostalCodeFieldCandidates = [
   "POSTAL_CODE",
   "POST_CODE",
@@ -286,7 +296,12 @@ async function getDriverRows(session,onProgress=()=>{}) {
 
 async function getCargoRows(session,filters,createdSince,onProgress){
   const fieldName=await firstSupportedField(session,"OPERATION_UNIT",cargoOrderFieldCandidates);
-  return getRows(session,"OPERATION_UNIT",fieldName?{...cargoFields,[fieldName]:"Номер заказа"}:cargoFields,filters,createdSince,onProgress);
+  const fields=fieldName?{...cargoFields,[fieldName]:"Номер заказа"}:{...cargoFields};
+  for(const [label,candidates] of Object.entries(cargoOptionalFieldCandidates)){
+    const optionalField=await firstSupportedField(session,"OPERATION_UNIT",candidates);
+    if(optionalField)fields[optionalField]=label;
+  }
+  return getRows(session,"OPERATION_UNIT",fields,filters,createdSince,onProgress);
 }
 
 async function getWarehouseRows(session,onProgress=()=>{}) {

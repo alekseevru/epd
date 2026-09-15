@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 import uuid
 import xml.etree.ElementTree as ET
 
@@ -88,24 +89,29 @@ class Generator(BaseGenerator):
         if isinstance(contexts, dict):
             contexts = [contexts]
         ctx = contexts[0]
-        def russian_address(parent, text):
+        def russian_address(parent, text, include_other_info=False):
             attrs = address_attributes(text or "")
             region = attrs.get("КодРегион")
             if not region:
                 return False
-            mapped = {"Индекс":"ZipCode","КодРегион":"Region","Город":"City","НаселПункт":"Settlement","Улица":"Street","Дом":"Building","Корпус":"Block"}
+            mapped = {"Индекс":"ZipCode","КодРегион":"Region","Город":"City","НаселПункт":"Locality","Улица":"Street","Дом":"Building","Корпус":"Block"}
             values = {mapped[key]:value for key,value in attrs.items() if key in mapped and value}
+            if include_other_info and text:
+                values["OtherInfo"] = str(text)[:1000]
             ET.SubElement(parent, "RussianAddress", values)
             return True
 
-        def org(parent, data, edo=""):
+        def org(parent, data, edo="", address_as_other_info=False):
+            foreign = bool(data.get("foreign"))
             details = ET.SubElement(parent, "OrganizationDetails", {
-                "OrgType":"2", "OrgName":data.get("name") or "Не указано", "Inn":data.get("inn") or "",
-                **({"Kpp":data.get("kpp")} if data.get("kpp") else {}),
-                **({"FnsParticipantId":edo} if edo else {}),
+                "OrgType":"4" if foreign else "2", "OrgName":data.get("name") or "Не указано",
+                **({"Inn":data.get("inn")} if data.get("inn") and not foreign else {}),
+                **({"Kpp":data.get("kpp")} if data.get("kpp") and not foreign else {}),
+                **({"FnsParticipantId":edo} if edo and not foreign else {}),
+                **({"StatusId":"LegalEntity","OrganizationOrPersonInfo":data.get("name") or "Не указано"} if foreign else {}),
             })
             address = ET.Element("Address")
-            if russian_address(address, data.get("address") or ""):
+            if russian_address(address, data.get("address") or "", address_as_other_info):
                 details.append(address)
 
         parts = signer_name.split()
@@ -128,20 +134,26 @@ class Generator(BaseGenerator):
                 "TransportationIndicator":"1", "CargoBatchId":str(uuid.uuid4()), "ShipmentCargoSpaceQuantity":"1", "NotifyReq":"0",
             })
             org(ET.SubElement(cargo,"Consignee"),cargo_ctx["consignee"],cargo_ctx.get("consignee_edo",""))
-            shipper = cargo_ctx.get("loading_owner") if (cargo_ctx.get("loading_owner") or {}).get("inn") else cargo_ctx["client"]
+            shipper = cargo_ctx.get("order_shipper") or (cargo_ctx.get("loading_owner") if (cargo_ctx.get("loading_owner") or {}).get("inn") else cargo_ctx["client"])
             org(ET.SubElement(cargo,"Shipper"),shipper)
             ET.SubElement(ET.SubElement(cargo,"TransportInfos"),"TransportInfo",{"TransportType":"1","BodyType":"Контейнеровоз"})
             weight = cargo_ctx.get("weight") or "0"
             ET.SubElement(cargo,"BatchWeight",{"NetWeight":weight,"GrossWeight":weight})
             descriptions=ET.SubElement(cargo,"ItemDescriptions")
-            item=ET.SubElement(descriptions,"ItemDescription",{"Name":f"Контейнер {cargo_ctx['container']}","CargoSpaceQuantity":"1","HasDangerous":"0","HasRestrictedItems":"0","CanSpecifyVolume":"0","IsForStateSystemRegistration":"0","HasPackaging":"0","HasCommodityCode":"0"})
+            item=ET.SubElement(descriptions,"ItemDescription",{"Name":cargo_ctx.get("cargo_name") or f"Контейнер {cargo_ctx['container']}","CargoSpaceQuantity":"1","HasDangerous":"0","HasRestrictedItems":"0","CanSpecifyVolume":"0","IsForStateSystemRegistration":"0","HasPackaging":"0","HasCommodityCode":"0"})
             ET.SubElement(ET.SubElement(item,"Marks"),"Mark").text=cargo_ctx["container"]
             ET.SubElement(ET.SubElement(item,"CargoNumbers"),"CargoNumber").text=str(cargo_index)
             origin=ET.SubElement(item,"CargoOriginCountryInfo")
             ET.SubElement(origin,"Country").text="643"
             ET.SubElement(item,"CargoWeight",{"NetWeight":weight,"GrossWeight":weight})
             containers=ET.SubElement(cargo,"TransportContainers")
-            ET.SubElement(containers,"TransportContainer",{"ContainerOrderNumber":str(cargo_index),"IsContainerProvided":"2"})
+            seals=[seal for seal in cargo_ctx.get("seal_numbers",[]) if re.fullmatch(r"\d{1,10}",str(seal))]
+            container=ET.SubElement(containers,"TransportContainer",{"ContainerOrderNumber":str(cargo_index),"IsContainerProvided":"1","TotalGrossWeight":weight,**({"SealCount":str(len(seals))} if seals else {})})
+            if seals:
+                seal_numbers=ET.SubElement(container,"SealNumbers")
+                for seal in seals:
+                    ET.SubElement(seal_numbers,"SealNumber").text=str(seal)
+            ET.SubElement(container,"IntContainerId").text=cargo_ctx["container"]
             address=ET.Element("Address")
             if russian_address(address,cargo_ctx["loading"]) or russian_address(address,shipper.get("address")):
                 wrapper=ET.SubElement(cargo,"CargoLocationAddress",{"CargoPickupLocation":"1"}); delivery=ET.SubElement(wrapper,"CargoDeliveryAddress"); delivery.append(address)
@@ -154,7 +166,7 @@ class Generator(BaseGenerator):
             if russian_address(address,cargo_ctx["delivery"]) or russian_address(address,cargo_ctx["consignee"].get("address")):
                 wrapper=ET.SubElement(cargo,"DestinationAddress",{"CargoDeliveryPoint":"1"}); delivery=ET.SubElement(wrapper,"CargoDeliveryAddress"); delivery.append(address)
         org(ET.SubElement(order,"ClientInfo"),ctx["client"],ctx["client_edo"])
-        org(ET.SubElement(order,"ForwarderInfo"),TAGLEX,TAGLEX["edo"])
+        org(ET.SubElement(order,"ForwarderInfo"),TAGLEX,TAGLEX["edo"],True)
         contract_date = str(contract.get("date") or "").split("T")[0].split(" ")[0]
         if len(contract_date) == 10 and contract_date[4] == "-":
             contract_date = f"{contract_date[8:10]}.{contract_date[5:7]}.{contract_date[:4]}"
