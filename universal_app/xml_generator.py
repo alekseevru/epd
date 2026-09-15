@@ -464,8 +464,8 @@ class Generator:
             for item in re.split(r"\s*(?:->|→|—>)\s*", route)
             if clean(item)
         ]
-        loading_name = route_names[0] if route_names else clean(value(row, "Место отправления", "Последняя точка прибытия"))
-        delivery_name = route_names[-1] if len(route_names) > 1 else clean(value(row, "Место прибытия", "Последняя точка прибытия", "Места дислокации грузовых единиц"))
+        loading_name = clean(value(row, "Место забора груза (Маршрут)")) or (route_names[0] if route_names else clean(value(row, "Место отправления", "Последняя точка прибытия")))
+        delivery_name = clean(value(row, "Место доставки груза (Маршрут)")) or (route_names[-1] if len(route_names) > 1 else clean(value(row, "Место прибытия", "Последняя точка прибытия", "Места дислокации грузовых единиц")))
         if not explicit_consignee and is_agm_shushary(delivery_name):
             consignee_name = "АГМ"
             consignee_company = self.catalogs.company(consignee_name)
