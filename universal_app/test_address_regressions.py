@@ -1,8 +1,10 @@
 import unittest
 import xml.etree.ElementTree as ET
+from datetime import date
 from pathlib import Path
 from address_xml import known_gar, complete_gar
 from data_sources import Catalogs
+from server_generator import Generator as ServerGenerator
 from xml_generator import Generator, TAGLEX, address_attributes, _set_address, _set_contract, cargo_packaging, known_point_phone, party
 
 
@@ -76,6 +78,55 @@ class AddressRegressions(unittest.TestCase):
         self.assertEqual(tander["inn"], "2310031475")
         self.assertEqual(tander["phone"], "+78612774654")
         self.assertTrue(tander["address"].startswith("350072"))
+
+    def test_forwarding_order_uses_valid_container_structure_and_services(self):
+        party_data = {
+            "name": 'ООО "Тест"',
+            "inn": "7700000000",
+            "kpp": "770001001",
+            "address": "г. Москва",
+        }
+        context = {
+            "planned_departure_datetime": date(2026, 9, 15),
+            "container": "XYZU4002173",
+            "weight": "1000",
+            "cargo_name": "Груз",
+            "shipper": party_data,
+            "consignee": party_data,
+            "loading": "г. Москва",
+            "delivery": "г. Санкт-Петербург",
+            "services": ["Организация перевозки", "Погрузочные" + chr(0xDC98) + " работы"],
+            "client": party_data,
+            "client_edo": "client-edo",
+            "client_contract": {"title": "Договор", "number": "1", "date": "2026-09-01"},
+            "order_date": "15.09.2026",
+            "order_number": "28384",
+        }
+        xml = ServerGenerator.forwarding_order_userdata([context], "Иванов Иван Иванович")
+        self.assertNotIn(chr(0xDC98), xml)
+        root = ET.fromstring(xml)
+        self.assertEqual(root.findtext(".//CargoNumber"), "1")
+        self.assertEqual(root.findtext(".//CargoOriginCountryInfo/Country"), "643")
+        container = root.find(".//TransportContainer")
+        self.assertEqual(container.attrib, {"ContainerOrderNumber": "1", "IsContainerProvided": "2"})
+        self.assertEqual(
+            [node.get("ServiceName") for node in root.findall(".//LogisticsServiceInfo")],
+            ["Организация перевозки", "Погрузочные работы"],
+        )
+        self.assertIsNotNone(root.find(".//DestinationAddress/CargoDeliveryAddress/Address"))
+
+    def test_forwarding_route_prefers_dedicated_tms_fields(self):
+        generator = ServerGenerator(Path(__file__).parent / "resources", Catalogs())
+        context = generator.context({
+            "_container": "TEST1234567",
+            "Клиент": "Тестовый клиент",
+            "Исполнитель": "Тестовый перевозчик",
+            "Место забора груза (Маршрут)": "Склад отправления",
+            "Место доставки груза (Маршрут)": "Склад доставки",
+            "Маршрут": "Неверное начало -> Неверный конец",
+        }, date(2026, 9, 15), "Тест", None)
+        self.assertIn("Склад отправления", context["loading"])
+        self.assertIn("Склад доставки", context["delivery"])
 
 
 if __name__ == '__main__':

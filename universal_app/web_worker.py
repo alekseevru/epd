@@ -162,7 +162,10 @@ def handle(request):
             if not order_number or not container_number:
                 continue
             auto = auto_index.get(container_number) or {}
-            order = grouped.setdefault(order_number, {"number":order_number, "containers":[], "client":clean(value(cargo, "Клиент", "Заказчик")), "route":clean(value(auto, "Маршрут")), "departure":clean(value(auto, "Плановая дата отправления")), "arrival":clean(value(auto, "Плановая дата прибытия", "Последняя план дата прибытия", "ETA (план дата прибытия)"))})
+            pickup = clean(value(auto, "Место забора груза (Маршрут)"))
+            delivery = clean(value(auto, "Место доставки груза (Маршрут)"))
+            route = " → ".join(filter(None, (pickup, delivery))) or clean(value(auto, "Маршрут"))
+            order = grouped.setdefault(order_number, {"number":order_number, "containers":[], "client":clean(value(cargo, "Клиент", "Заказчик")), "route":route, "departure":clean(value(auto, "Плановая дата отправления")), "arrival":clean(value(auto, "Плановая дата прибытия", "Последняя план дата прибытия", "ETA (план дата прибытия)"))})
             if container_number not in order["containers"]:
                 order["containers"].append(container_number)
         orders = list(grouped.values())
@@ -171,6 +174,7 @@ def handle(request):
         return {"items":orders[:limit], "total":len(orders)}
     if action == "forwarding_userdata_multi":
         containers = [clean(item) for item in request.get("containers", []) if clean(item)]
+        services = list(dict.fromkeys(clean(item) for item in request.get("services", []) if clean(item)))
         if not containers:
             raise ValueError("в заказе нет контейнеров")
         user = clean(request.get("user"))
@@ -181,6 +185,7 @@ def handle(request):
                 raise ValueError(f"контейнер {container_number} не найден в обоих реестрах")
             context = generator.context({**cargo, **auto, "_container":container_number}, date.fromisoformat(request.get("date") or date.today().isoformat()), user, None)
             context["order_number"] = clean(request.get("orderNumber")) or context["order_number"]
+            context["services"] = services
             contexts.append(context)
         return {"userDataXml":generator.forwarding_order_userdata(contexts, clean(request.get("signer")))}
     container = request["container"]
