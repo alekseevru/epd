@@ -451,9 +451,11 @@ class Generator:
         consignee_inn = consignee_inn_match.group(1) if consignee_inn_match else ""
         consignee_name = clean(re.sub(r"\s+ИНН\s*[:№-]?\s*\d{10,12}\b.*$", "", consignee_text, flags=re.IGNORECASE)) if explicit_consignee else client_name
         carrier_name = clean(value(row, "Исполнитель", "Партнер", "Перевозчик"))
+        order_shipper_name = clean(value(row, "Грузоотправитель из заказа"))
         client_company = self.catalogs.company(client_name)
         consignee_company = self.catalogs.company(consignee_name, inn=consignee_inn)
         carrier_company = self.catalogs.company(carrier_name)
+        order_shipper_company = self.catalogs.company(order_shipper_name)
         driver_name = clean(value(row, "Водитель", "ФИО водителя"))
         driver = self.catalogs.driver(driver_name, carrier_name) or {}
         truck_number = clean(value(row, "Номер автомашины", "Транспортное средство"))
@@ -512,6 +514,8 @@ class Generator:
             "consignee_edo": self.catalogs.edo_id(consignee_company),
             "carrier": party(carrier_company, carrier_name),
             "carrier_edo": self.catalogs.edo_id(carrier_company),
+            "order_shipper": {**party(order_shipper_company, order_shipper_name), "foreign": True} if order_shipper_name else None,
+            "cargo_name": clean(value(row, "Наименование груза")) or f"Контейнер {container}",
             "driver_name": driver_name or clean(driver.get("Полное имя")),
             "driver_phone": normalize_phone(value(row, "Телефон водителя") or driver.get("Телефон 1") or driver.get("Телефон 2")),
             "driver_license_series": clean(driver.get("Серия водительского удостоверения")),
@@ -525,6 +529,7 @@ class Generator:
             "trailer": clean(value(row, "Номер прицепа")),
             "weight": clean(value(row, "Вес брутто")) or "0",
             "seals": ", ".join(dict.fromkeys(filter(None, [clean(value(row, "Номер пломбы")), clean(value(row, "Номер пломбы 2"))]))),
+            "seal_numbers": list(dict.fromkeys(filter(None, [clean(value(row, "Номер пломбы")), clean(value(row, "Номер пломбы 2"))]))),
             "loading": point_address(loading_point, loading_name),
             "delivery": point_address(delivery_point, delivery_name),
             "loading_owner": point_owner(loading_point),
