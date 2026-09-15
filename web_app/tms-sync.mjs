@@ -337,6 +337,38 @@ function writeGeneratorCache(target,rows) {
   fs.writeFileSync(target,JSON.stringify(rows));
 }
 
+function mergeTransportCache(target,table,rows) {
+  const jsonTarget=target.replace(/\.xlsx$/i,".json");
+  let existing=[];
+  try{existing=JSON.parse(fs.readFileSync(jsonTarget,"utf8"));}catch{}
+  const merged=new Map();
+  for(const row of [...existing,...rows]){
+    const id=cleanText(row["Номер записи"]);
+    const container=cleanText(row[table==="OPERATION_UNIT"?"Грузовая единица":"Номера грузовых единиц"]).toUpperCase();
+    const key=id?`id:${id}`:`container:${container}`;
+    if(container)merged.set(key,row);
+  }
+  const result=[...merged.values()];
+  writeWorkbook(target,table,result);
+  writeGeneratorCache(jsonTarget,result);
+  return result;
+}
+
+export async function refreshTmsContainers({login:loginName,password,cacheDir,containers}) {
+  const requested=[...new Set((containers||[]).map(value=>cleanText(value).toUpperCase()).filter(Boolean))];
+  if(!requested.length)return {cargo:0,auto:0};
+  const session=await login(loginName,password);const cargoRows=[],autoRows=[];
+  for(const container of requested){
+    const cargoFilter={tryNewFilterFormat:true,value:[["UNIT_NUMBER","=",container]]};
+    const autoFilter={tryNewFilterFormat:true,value:[["ID_OPERATION_TYPE","=",1],["UNITS_NUMBERS","=",container]]};
+    cargoRows.push(...await getCargoRows(session,cargoFilter,"",()=>{}));
+    autoRows.push(...await getAutoRows(session,autoFilter,"",()=>{}));
+  }
+  if(cargoRows.length)mergeTransportCache(path.join(cacheDir,"cargo.xlsx"),"OPERATION_UNIT",cargoRows);
+  if(autoRows.length)mergeTransportCache(path.join(cacheDir,"auto.xlsx"),"OPERATION_SUB_DOC",autoRows);
+  return {cargo:cargoRows.length,auto:autoRows.length};
+}
+
 export async function syncTms({ login: loginName, password, cacheDir, referenceDir, onStatus = () => {} }) {
   onStatus("login","working","Входим в TMS…");
   let session;
@@ -365,10 +397,11 @@ export async function syncTms({ login: loginName, password, cacheDir, referenceD
       const rows=key==="drivers"?await getDriverRows(session,progress):key==="points"?await getWarehouseRows(session,progress):key==="auto"?await getAutoRows(session,filter,minimumDate,progress):key==="cargo"?await getCargoRows(session,filter,minimumDate,progress):key==="contracts"?await getContractRows(session,progress):await getRows(session,table,fields,filter,minimumDate,progress);
       if(!rows.length) throw new Error("реестр пуст");
       const target=path.join(targetDir,filename);
-      writeWorkbook(target,table,rows);
+      const savedRows=(key==="cargo"||key==="auto")?mergeTransportCache(target,table,rows):rows;
+      if(key!=="cargo"&&key!=="auto")writeWorkbook(target,table,rows);
       if(key==="contracts")writeContractCatalog(path.join(referenceDir,"contracts.json"),rows);
-      else writeGeneratorCache(target.replace(/\.xlsx$/i,".json"),rows);
-      counts[key]=rows.length; onStatus(key,"saved",rows.length.toLocaleString("ru-RU")+" строк");
+      else if(key!=="cargo"&&key!=="auto")writeGeneratorCache(target.replace(/\.xlsx$/i,".json"),rows);
+      counts[key]=savedRows.length; onStatus(key,"saved",savedRows.length.toLocaleString("ru-RU")+" строк");
     } catch(error) {
       if(key==="contracts"){
         const saved=path.join(referenceDir,"contracts.json");
