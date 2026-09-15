@@ -68,7 +68,17 @@ const warehouseFields = {
   ROLE_NAMES:"Роли", LIST_WAREHOUSE_NAME_ENG:"Название (англ)", ADDRESS_RUS:"Адрес на русском языке",
   ADDRESS_ENG:"Адрес на английском языке", PERSON_PHONE:"Номер телефона", UNLOCODE:"UN/LOCODE", ITN:"ИНН",
 };
-const cargoOrderFieldCandidates=["ORDER_NUMBER","NUMBER_ORDER","ORDER_NUM","ORDER_CODE","DOC_PARENT_ORDER_NUMBER","ID_ORDER"];
+const cargoOrderFieldCandidates=[
+  "DOC_PARENT_ORDER_NUMBER",
+  "DOC_PARENT_ORDER_NUMBER_ORDER",
+  "DOC_PARENT_ORDER_DOC_NUMBER",
+  "DOC_PARENT_ORDER_NO",
+  "ORDER_NUMBER",
+  "NUMBER_ORDER",
+  "ORDER_NUM",
+  "ORDER_CODE",
+  "ID_ORDER",
+];
 const warehousePostalCodeFieldCandidates = [
   "POSTAL_CODE",
   "POST_CODE",
@@ -219,6 +229,8 @@ async function getRows(session, table, fields, filters, createdSince = "", onPro
       const points = route.split(/\s*(?:->|→|—>)\s*/);
       row["Место отправления"] = points[0] || "";
       row["Место прибытия"] ||= points.at(-1) || "";
+      row["Место забора груза (Маршрут)"] = points[0] || "";
+      row["Место доставки груза (Маршрут)"] = points.length > 1 ? points.at(-1) || "" : "";
       all.push(row);
     }
     onProgress(all.length,`Получено ${all.length.toLocaleString("ru-RU")} строк`,Math.min(95,Math.max(5,Math.round(all.length/maxRows*95))));

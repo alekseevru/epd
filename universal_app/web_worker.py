@@ -170,7 +170,10 @@ def handle(request):
                 order["containers"].append(container_number)
         orders = list(grouped.values())
         if needle:
-            orders = [order for order in orders if needle in " ".join([order["number"], order["client"], order["route"], *order["containers"]]).casefold()]
+            if needle.isdigit():
+                orders = [order for order in orders if order["number"].casefold().startswith(needle)]
+            else:
+                orders = [order for order in orders if needle in " ".join([order["number"], order["client"], order["route"], *order["containers"]]).casefold()]
         return {"items":orders[:limit], "total":len(orders)}
     if action == "forwarding_userdata_multi":
         containers = [clean(item) for item in request.get("containers", []) if clean(item)]
@@ -181,9 +184,9 @@ def handle(request):
         contexts = []
         for container_number in containers:
             cargo, auto = cargo_index.get(container_number), auto_index.get(container_number)
-            if not cargo or not auto:
-                raise ValueError(f"контейнер {container_number} не найден в обоих реестрах")
-            context = generator.context({**cargo, **auto, "_container":container_number}, date.fromisoformat(request.get("date") or date.today().isoformat()), user, None)
+            if not cargo:
+                raise ValueError(f"контейнер {container_number} не найден в реестре грузов")
+            context = generator.context({**cargo, **(auto or {}), "_container":container_number}, date.fromisoformat(request.get("date") or date.today().isoformat()), user, None)
             context["order_number"] = clean(request.get("orderNumber")) or context["order_number"]
             context["services"] = services
             contexts.append(context)
