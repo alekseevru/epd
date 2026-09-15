@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import * as XLSX from "xlsx";
-import { syncTms, contractRowsToCatalog } from "./tms-sync.mjs";
+import { syncTms, refreshTmsContainers, contractRowsToCatalog } from "./tms-sync.mjs";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const appPackage = JSON.parse(fs.readFileSync(path.join(root,"package.json"),"utf8"));
@@ -365,6 +365,21 @@ function restartGeneratorWorker(){
 }
 startGeneratorWorker();
 
+const tmsCacheMaxAge=Number(process.env.TMS_CACHE_MAX_AGE_HOURS||6)*3_600_000;
+let backgroundTmsSync=null;
+function tmsTransportCacheIsStale(){
+  const files=[path.join(cacheRoot,"cargo.json"),path.join(cacheRoot,"auto.json")];
+  return files.some(file=>!fs.existsSync(file)||Date.now()-fs.statSync(file).mtimeMs>tmsCacheMaxAge);
+}
+function refreshStaleTmsCache(){
+  if(backgroundTmsSync||!tmsTransportCacheIsStale())return backgroundTmsSync;
+  let credentials;try{credentials=readTmsCredentials();}catch{return null;}if(!credentials)return null;
+  backgroundTmsSync=syncTms({...credentials,cacheDir:cacheRoot,referenceDir:referenceRoot})
+    .then(()=>restartGeneratorWorker()).catch(error=>console.error("Фоновое обновление TMS:",error.message)).finally(()=>{backgroundTmsSync=null;});
+  return backgroundTmsSync;
+}
+setTimeout(()=>void refreshStaleTmsCache(),1_000);
+
 const types = { ".css":"text/css; charset=utf-8", ".js":"text/javascript; charset=utf-8", ".map":"application/json", ".png":"image/png", ".jpg":"image/jpeg", ".svg":"image/svg+xml", ".woff2":"font/woff2" };
 
 const server = http.createServer((request, response) => {
@@ -465,7 +480,14 @@ const server = http.createServer((request, response) => {
   if (request.method === "POST" && url.pathname === "/api/trips/search") {
     let body="";request.setEncoding("utf8");request.on("data",chunk=>body+=chunk);request.on("end",()=>void(async()=>{try{
       const payload=JSON.parse(body||"{}");if(!Array.isArray(payload.containers))throw new Error("Не переданы номера контейнеров");
-      const result=await sendGeneratorRequest({...payload,action:"search_trips"});if(result.error)throw new Error(result.error);
+      let result=await sendGeneratorRequest({...payload,action:"search_trips"});if(result.error)throw new Error(result.error);
+      const missing=(result.items||[]).filter(item=>item.missingCargo||item.missingAuto).map(item=>item.container);
+      if(missing.length){
+        let credentials;try{credentials=readTmsCredentials();}catch{}
+        if(credentials){
+          try{await refreshTmsContainers({...credentials,cacheDir:cacheRoot,containers:missing});restartGeneratorWorker();result=await sendGeneratorRequest({...payload,action:"search_trips"});if(result.error)throw new Error(result.error);}catch{}
+        }
+      }
       response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify(result));
     }catch(error){response.writeHead(400,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({error:error.message||"Не удалось выполнить поиск"}));}})());return;
   }
