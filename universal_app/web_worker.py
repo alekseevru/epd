@@ -141,15 +141,16 @@ def handle(request):
         items = []
         for container_number in containers:
             cargo, auto = cargo_index.get(container_number), auto_index.get(container_number)
+            resolved_cargo = dict(cargo) if cargo else (dict(auto) if auto else None)
             resolved_auto = dict(auto) if auto else None
-            if cargo and resolved_auto:
+            if resolved_cargo and resolved_auto:
                 try:
-                    context = generator.context({**cargo, **resolved_auto, "_container":container_number}, date.today(), clean(request.get("user")) or "Пользователь", None)
+                    context = generator.context({**resolved_cargo, **resolved_auto, "_container":container_number}, date.today(), clean(request.get("user")) or "Пользователь", None)
                     if context.get("loading"):
                         resolved_auto["Адрес места отправления"] = context["loading"]
                 except Exception:
                     pass
-            items.append({"container":container_number, "cargo":cargo, "auto":resolved_auto, "missingCargo":not cargo, "missingAuto":not auto})
+            items.append({"container":container_number, "cargo":resolved_cargo, "auto":resolved_auto, "missingCargo":not resolved_cargo, "missingAuto":not auto, "cargoSource":"cargo" if cargo else ("auto" if auto else "missing")})
         return {"items":items}
     if action == "search_orders":
         needle = clean(request.get("query")).casefold()
@@ -193,6 +194,8 @@ def handle(request):
         return {"userDataXml":generator.forwarding_order_userdata(contexts, clean(request.get("signer")))}
     container = request["container"]
     cargo, auto = cargo_index.get(container), auto_index.get(container)
+    if not cargo and auto:
+        cargo = dict(auto)
     if not cargo or not auto: raise ValueError("Контейнер не найден в обоих локальных реестрах")
     row = {**cargo, **auto, "_container": container}
     instruction = clean(value(row, "Перенаправление сдачи порожнего", "Инструкция на сдачу порожнего", "Контейнерный сток"))
