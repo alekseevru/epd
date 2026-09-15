@@ -458,7 +458,7 @@ class Generator:
         driver = self.catalogs.driver(driver_name, carrier_name) or {}
         truck_number = clean(value(row, "Номер автомашины", "Транспортное средство"))
         truck = self.catalogs.vehicle(truck_number) or {}
-        route = clean(value(row, "Маршрут"))
+        route = clean(value(row, "Маршрут", "Маршрут груза"))
         route_names = [
             clean(re.sub(r"^\(RU\)\s*", "", item, flags=re.IGNORECASE))
             for item in re.split(r"\s*(?:->|→|—>)\s*", route)
