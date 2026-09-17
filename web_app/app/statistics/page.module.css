@@ -26,6 +26,9 @@
 @media(max-width:900px){.metrics{grid-template-columns:repeat(2,1fr)}}@media(max-width:650px){.metrics{grid-template-columns:1fr}.tripList{padding-left:18px}}
 
 /* Compact TMS backlog: carriers at left, their consignees at right. */
+.backlogModeSwitch{display:flex;gap:3px;width:max-content;max-width:calc(100% - 32px);margin:0 16px 12px;padding:3px;border-radius:9px;background:#edf2f3}
+.backlogModeSwitch button{padding:8px 12px;border:0;border-radius:7px;background:transparent;color:#607278;font-size:11px;font-weight:800;cursor:pointer}
+.backlogModeSwitch .on{background:#fff;color:var(--deep);box-shadow:0 2px 7px #173f5118}
 .backlogLayout{display:grid;grid-template-columns:minmax(285px,36%) minmax(0,1fr);border-top:1px solid #eee2da}
 .backlogCarriers{min-width:0;border-right:1px solid #eee2da}
 .backlogPaneTitle{display:flex;justify-content:space-between;padding:12px 16px;background:#eef5f7;color:var(--ocean);font-size:10px;font-weight:800;text-transform:uppercase}
