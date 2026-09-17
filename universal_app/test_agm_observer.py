@@ -29,7 +29,7 @@ class AgmObserverTests(unittest.TestCase):
 
     def make_xml(self, client, consignee):
         ctx = self.generator.context({
-            "_container": "FITU5701625",
+            "_container": "TEST1234567",
             "Клиент": client,
             "Грузополучатель": consignee,
             "Исполнитель": "Тестовый перевозчик",
