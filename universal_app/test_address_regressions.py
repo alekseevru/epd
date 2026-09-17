@@ -73,11 +73,34 @@ class AddressRegressions(unittest.TestCase):
     def test_known_reference_fallbacks(self):
         self.assertEqual(known_point_phone({"Название": "Силикатная"}), "+74991879088")
         self.assertEqual(known_point_phone({"Название": "ТК Усады"}), "+74955653350")
+        self.assertEqual(known_point_phone({"Название": "ООО Логистический парк Янино"}), "+78123343757")
+        self.assertEqual(known_point_phone({"Название": "Пепси Янино (ПровеГрупп)"}), "")
         self.assertEqual(party({"Наименование": 'ООО "ТЛК КЕДР"'})["phone"], "+73433790858")
         tander = party({"Наименование": 'АО "ТАНДЕР"'})
         self.assertEqual(tander["inn"], "2310031475")
         self.assertEqual(tander["phone"], "+78612774654")
         self.assertTrue(tander["address"].startswith("350072"))
+
+    def test_yanino_loading_owner_phone_reaches_etrn(self):
+        catalogs = Catalogs()
+        catalogs.points = [{
+            "Номер склада и название": "ООО Логистический парк Янино",
+            "Название": "ООО Логистический парк Янино",
+            "ИНН": "7813173683",
+            "Номер телефона": "",
+            "Адрес на русском языке": "188689, Ленинградская область, Янино-1, Логистический въезд, здание 5",
+        }]
+        generator = Generator(Path(__file__).parent / "resources", catalogs)
+        context = generator.context({
+            "_container": "TEST1234567",
+            "Клиент": "Тестовый клиент",
+            "Исполнитель": "Тестовый перевозчик",
+            "Маршрут": "(RU) ООО Логистический парк Янино -> (RU) Склад доставки",
+        }, date(2026, 9, 17), "Иванов Иван Иванович", None)
+        self.assertEqual(context["loading_owner"]["phone"], "+78123343757")
+        _, content = generator.etrn(context)
+        root = ET.fromstring(content)
+        self.assertEqual(root.findtext(".//СвПогруз/ВладИнфр//Контакт/Тлф"), "+78123343757")
 
     def test_forwarding_order_uses_valid_container_structure_and_services(self):
         party_data = {
