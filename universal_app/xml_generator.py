@@ -30,6 +30,10 @@ KNOWN_PARTY_PHONES_BY_NAME = {
     "АГМ": "+79255030287",
 }
 
+AGM_INN = "7817137260"
+AGRL_INN = "5047295775"
+AGRL_OBSERVER_EDO_ID = "2BM-5047295775-504701001-202407291203261433841"
+
 KNOWN_PARTY_DETAILS_BY_NAME = (
     (("ТЛК КЕДР", "ТРАНСПОРТНО ЛОГИСТИЧЕСКАЯ КОМПАНИЯ КЕДР"), {"phone": "+73433790858"}),
     (("ФТК СОЛТРАНС", "СОЛТРАНС"), {"phone": "+78124954312"}),
@@ -555,6 +559,12 @@ class Generator:
     def etrn(self, ctx: dict, empty: bool = False) -> tuple[str, bytes]:
         self.fill_missing_kpp(ctx)
         root = copy.deepcopy(self.etrn_template)
+        if any(clean((ctx.get(role) or {}).get("inn")) == AGM_INN for role in ("client", "consignee")):
+            agrl = self.catalogs.company(inn=AGRL_INN)
+            observer_id = self.catalogs.edo_id(agrl) or AGRL_OBSERVER_EDO_ID
+            observer = ET.Element("ИдПолИной")
+            observer.text = observer_id
+            root.insert(0, observer)
         now = datetime.now()
         consignee = TAGLEX if empty else ctx["consignee"]
         consignee_edo = TAGLEX["edo"] if empty else ctx["consignee_edo"]
