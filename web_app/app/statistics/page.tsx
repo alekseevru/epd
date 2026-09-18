@@ -48,7 +48,7 @@ export default function Statistics(){
   const titleNumber=audience==="consignee"?3:2,entityLabel=audience==="consignee"?"Грузополучатель":"Перевозчик";
 
   return <main className={styles.shell}>
-    <header className={styles.topbar}><div>А</div><strong>Создание ЭПД <small>версия {appPackage.version}</small></strong><nav><a href="/workspace">Создание документов</a><a href="/forwarding-orders">Поручения клиентам</a><a href="/control">Контроль подписания</a><a className={styles.active} href="/statistics">Статистика</a><a href="/edo-settings">Настройки ID ЭДО</a></nav></header>
+    <header className={styles.topbar}><div style={{background:"transparent"}}><img src="/agr-logo.png" alt="Логотип АГР" width={40} height={40} style={{display:"block",objectFit:"contain"}}/></div><strong>Создание ЭПД <small>версия {appPackage.version}</small></strong><nav><a href="/workspace">Создание документов</a><a href="/forwarding-orders">Поручения клиентам</a><a href="/control">Контроль подписания</a><a className={styles.active} href="/statistics">Статистика</a><a href="/edo-settings">Настройки ID ЭДО</a></nav></header>
     <section className={styles.content}>
       <header className={styles.heading}><div><small>АНАЛИТИКА ЭТрН</small><h1>Статистика ЭТрН</h1><p>{audience==="carrier"?"Контроль подписания титула 2 перевозчиками.":audience==="consignee"?"Контроль подписания титула 3 грузополучателями после наступления даты доставки.":"Контроль рейсов TMS, для которых еще не выпущена ЭТрН."}</p></div><button onClick={load} disabled={loading}>{loading?"Считаем…":"Обновить"}</button></header>
       {error&&<p className={styles.error}>{error}</p>}
