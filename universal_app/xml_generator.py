@@ -23,19 +23,28 @@ KNOWN_PARTY_PHONES = {
     "7734515704": "+74957750739",  # ТАГЛЕКС
     "5047295775": "+79255030287",  # АГРЛ
     "7817137260": "+79255030287",  # АГМ
+    "7814858496": "+79033478593",  # АГС
 }
 
 KNOWN_PARTY_PHONES_BY_NAME = {
     "АГРЛ": "+79255030287",
     "АГМ": "+79255030287",
+    "АГС": "+79033478593",
 }
 
 AGM_INN = "7817137260"
 AGS_INN = "7814858496"
 AGRL_INN = "5047295775"
 AGRL_OBSERVER_EDO_ID = "2BM-5047295775-504701001-202407291203261433841"
+AGS_DETAILS = {
+    "inn": AGS_INN,
+    "kpp": "781401001",
+    "phone": "+79033478593",
+    "address": "197701, Санкт-Петербург, г. Сестрорецк, Левашовское шоссе, д. 20, стр. 1",
+}
 
 KNOWN_PARTY_DETAILS_BY_NAME = (
+    (("АГС",), AGS_DETAILS),
     (("ТЛК КЕДР", "ТРАНСПОРТНО ЛОГИСТИЧЕСКАЯ КОМПАНИЯ КЕДР"), {"phone": "+73433790858"}),
     (("ФТК СОЛТРАНС", "СОЛТРАНС"), {"phone": "+78124954312"}),
     (("КОНТЭО",), {"phone": "+78122445410"}),
@@ -49,6 +58,7 @@ KNOWN_PARTY_DETAILS_BY_NAME = (
 )
 
 KNOWN_POINT_PHONES = (
+    (("АГС",), AGS_DETAILS["phone"]),
     (("ЛОГИСТИЧЕСКИЙ ПАРК ЯНИНО",), "+78123343757"),
     (("ПКТ", "ПЕРВЫЙ КОНТЕЙНЕРНЫЙ ТЕРМИНАЛ"), "+78123357701"),
     (("ПЛП", "ПЕТРОЛЕСПОРТ"), "+78123638779"),
@@ -105,6 +115,10 @@ def known_point_phone(point: dict | None) -> str:
 def is_agm_shushary(value: str) -> bool:
     key = normalize_name(value)
     return "АГМ" in key and "ШУШАР" in key
+
+
+def is_ags(value: str) -> bool:
+    return normalize_name(value) == normalize_name("АГС")
 
 
 REGION_CODES = (
@@ -199,13 +213,16 @@ def party(company: dict | None, fallback_name: str = "") -> dict:
     name = organization_name(company, fallback_name)
     known = known_party_details(name or fallback_name)
     inn = clean(company.get("ИНН")) or known.get("inn", "")
-    return {
+    result = {
         "name": name,
         "inn": inn,
-        "kpp": clean(company.get("КПП")),
+        "kpp": clean(company.get("КПП")) or known.get("kpp", ""),
         "phone": normalize_phone(company.get("Телефон") or company.get("Телефон (раб.)")) or KNOWN_PARTY_PHONES.get(inn, "") or known_party_phone(name) or known.get("phone", ""),
         "address": clean(company.get("Фактический адрес") or company.get("Юридический адрес")) or known.get("address", ""),
     }
+    if inn == AGS_INN or is_ags(name or fallback_name):
+        result.update(AGS_DETAILS)
+    return result
 
 
 def cargo_packaging(client: dict | None) -> tuple[str, str]:
@@ -474,8 +491,8 @@ class Generator:
         ]
         loading_name = clean(value(row, "Место забора груза (Маршрут)")) or (route_names[0] if route_names else clean(value(row, "Место отправления", "Последняя точка прибытия")))
         delivery_name = clean(value(row, "Место доставки груза (Маршрут)")) or (route_names[-1] if len(route_names) > 1 else clean(value(row, "Место прибытия", "Последняя точка прибытия", "Места дислокации грузовых единиц")))
-        if not explicit_consignee and is_agm_shushary(delivery_name):
-            consignee_name = "АГМ"
+        if not explicit_consignee and (is_agm_shushary(delivery_name) or is_ags(delivery_name)):
+            consignee_name = "АГС" if is_ags(delivery_name) else "АГМ"
             consignee_company = self.catalogs.company(consignee_name)
         loading_point = self.catalogs.point(loading_name)
         delivery_point = self.catalogs.point(delivery_name)
@@ -484,6 +501,8 @@ class Generator:
             if normalize_name(fallback) == normalize_name("Электроугли"):
                 return "142461, Московская область, городской округ Богородский, территория Носовихинское шоссе, 26-й километр, д. 1"
             point_name = normalize_name(clean((point or {}).get("Название")) or fallback)
+            if is_ags(clean((point or {}).get("Название")) or fallback):
+                return AGS_DETAILS["address"]
             if is_agm_shushary(point_name) or is_agm_shushary(fallback):
                 return "196657, Санкт-Петербург, посёлок Шушары, ул. Автозаводская, д. 2, лит. А"
             address = clean((point or {}).get("Адрес на русском языке") or (point or {}).get("Адрес") or fallback)
