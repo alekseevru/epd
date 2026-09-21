@@ -80,6 +80,60 @@ class AddressRegressions(unittest.TestCase):
         self.assertEqual(tander["inn"], "2310031475")
         self.assertEqual(tander["phone"], "+78612774654")
         self.assertTrue(tander["address"].startswith("350072"))
+        ags = party({"Наименование": 'ООО "АГС"', "ИНН": "7814858496"})
+        self.assertEqual(ags["phone"], "+79033478593")
+        self.assertEqual(ags["kpp"], "781401001")
+        self.assertEqual(
+            address_attributes(ags["address"]),
+            {
+                "Индекс": "197701",
+                "Дом": "20",
+                "Корпус": "стр. 1",
+                "КодРегион": "78",
+                "Город": "Сестрорецк",
+                "Улица": "Левашовское шоссе",
+            },
+        )
+
+    def test_ags_delivery_details_reach_etrn(self):
+        catalogs = Catalogs()
+        catalogs.companies = [{
+            "Наименование": 'ООО "АГС"',
+            "ИНН": "7814858496",
+            "КПП": "781401001",
+            "Телефон": "",
+            "Юридический адрес": "",
+        }]
+        catalogs.points = [{
+            "Номер склада и название": "ООО «АГС»",
+            "Название": "ООО «АГС»",
+            "ИНН": "7814858496",
+            "Номер телефона": "",
+            "Адрес на русском языке": "",
+        }]
+        generator = Generator(Path(__file__).parent / "resources", catalogs)
+        for container in ("YYCU6045148", "ZONU8246681"):
+            context = generator.context({
+                "_container": container,
+                "Клиент": 'ООО "АГРЛ"',
+                "Исполнитель": "Тестовый перевозчик",
+                "Маршрут": "(RU) АО ПКТ (Первый контейнерный терминал) -> (RU) ООО «АГС»",
+                "Место отправления": "(RU) АО ПКТ (Первый контейнерный терминал)",
+                "Место прибытия": "(RU) ООО «АГС»",
+            }, date(2026, 9, 21), "Иванов Иван Иванович", None)
+            self.assertEqual(context["consignee"]["phone"], "+79033478593")
+            self.assertEqual(context["delivery_owner"]["phone"], "+79033478593")
+            self.assertEqual(context["delivery"], "197701, Санкт-Петербург, г. Сестрорецк, Левашовское шоссе, д. 20, стр. 1")
+            _, content = generator.etrn(context)
+            root = ET.fromstring(content)
+            ags_parties = [
+                node for node in root.findall(".//СвЮЛУч")
+                if node.get("ИННЮЛ") == "7814858496"
+            ]
+            self.assertTrue(ags_parties)
+            self.assertIn("+79033478593", [node.text for node in root.findall(".//Контакт/Тлф")])
+            addresses = root.findall(".//АдрРФ") + root.findall(".//АдресРФ")
+            self.assertTrue(any(node.get("Индекс") == "197701" and node.get("КодРегион") == "78" for node in addresses))
 
     def test_yanino_loading_owner_phone_reaches_etrn(self):
         catalogs = Catalogs()
