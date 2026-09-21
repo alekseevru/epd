@@ -118,7 +118,11 @@ def is_agm_shushary(value: str) -> bool:
 
 
 def is_ags(value: str) -> bool:
-    return normalize_name(value) == normalize_name("АГС")
+    key = normalize_name(value)
+    # Названия точек маршрута из TMS обычно имеют страновой префикс:
+    # «(RU) ООО «АГС»». normalize_name убирает форму собственности,
+    # но сохраняет RU, поэтому учитываем оба представления.
+    return key in {normalize_name("АГС"), normalize_name("(RU) АГС")}
 
 
 REGION_CODES = (
@@ -562,8 +566,8 @@ class Generator:
             "delivery": point_address(delivery_point, delivery_name),
             "loading_owner": point_owner(loading_point),
             "delivery_owner": point_owner(delivery_point),
-            "loading_point_found": bool(loading_point),
-            "delivery_point_found": bool(delivery_point),
+            "loading_point_found": bool(loading_point) or is_ags(loading_name) or is_agm_shushary(loading_name),
+            "delivery_point_found": bool(delivery_point) or is_ags(delivery_name) or is_agm_shushary(delivery_name),
             "delivery_datetime": _as_datetime(value(row, "Планируемая дата доставки на склад", "Плановая дата доставки на склад", "Плановая дата прибытия", "Последняя план дата прибытия", "ETA (план дата прибытия)"), datetime.combine(trip_date, time(9))),
             "planned_arrival_datetime": _as_datetime(value(row, "Плановая дата прибытия", "Последняя план дата прибытия", "ETA (план дата прибытия)"), _as_datetime(value(row, "Планируемая дата доставки на склад", "Плановая дата доставки на склад"), datetime.combine(trip_date, time(17)))),
             "empty_delivery_datetime": _as_datetime(value(row, "Дата сдачи порожнего"), _as_datetime(value(row, "Плановая дата прибытия", "Последняя план дата прибытия", "ETA (план дата прибытия)"), datetime.combine(trip_date, time(9)))),
