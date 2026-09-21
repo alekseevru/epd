@@ -521,6 +521,9 @@ class Generator:
                 result["phone"] = normalize_phone(point.get("Номер телефона")) or known_point_phone(point) or result.get("phone", "")
             return result
 
+        stock_party = point_owner(stock)
+        stock_company = self.catalogs.company(inn=stock_party.get("inn", "")) if stock_party.get("inn") else None
+
         planned_departure_datetime = _as_datetime(
             value(row, "Плановая дата отправления"), datetime.combine(trip_date, time(9))
         )
@@ -569,6 +572,8 @@ class Generator:
             # совпадает с заявленной подачей; фактическое убытие ставится на час позже.
             "actual_departure_datetime": _as_datetime(value(row, "Плановая дата отправления"), datetime.combine(trip_date, time(9))),
             "stock": stock,
+            "stock_party": stock_party,
+            "stock_edo": self.catalogs.edo_id(stock_company),
         }
 
     def fill_missing_kpp(self, ctx):
@@ -587,8 +592,8 @@ class Generator:
             observer.text = observer_id
             root.insert(0, observer)
         now = datetime.now()
-        consignee = TAGLEX if empty else ctx["consignee"]
-        consignee_edo = TAGLEX["edo"] if empty else ctx["consignee_edo"]
+        consignee = ctx.get("stock_party") or TAGLEX if empty else ctx["consignee"]
+        consignee_edo = (ctx.get("stock_edo") or TAGLEX["edo"]) if empty else ctx["consignee_edo"]
         file_id = (
             f"ON_TRNACLGROT_{ctx['carrier_edo']}_{consignee_edo}_{TAGLEX['edo']}_0_"
             f"{ctx['date']:%Y%m%d}_{uuid.uuid4()}"

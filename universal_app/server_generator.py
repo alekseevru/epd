@@ -36,6 +36,8 @@ class Generator(BaseGenerator):
             missing.append("автомобиль")
         if empty and not ctx["stock"]:
             missing.append("контейнерный сток")
+        if empty and ctx["stock"] and not ctx.get("stock_party", {}).get("inn"):
+            missing.append("ИНН контейнерного стока")
         if missing:
             raise ValueError("не заполнено: " + ", ".join(missing))
 

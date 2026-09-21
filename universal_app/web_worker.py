@@ -198,13 +198,16 @@ def handle(request):
         cargo = dict(auto)
     if not cargo or not auto: raise ValueError("Контейнер не найден в обоих локальных реестрах")
     row = {**cargo, **auto, "_container": container}
-    instruction = clean(value(row, "Перенаправление сдачи порожнего", "Инструкция на сдачу порожнего", "Контейнерный сток"))
-    stock = catalogs.stock(instruction)
-    if not stock and instruction: stock = {"Название":instruction,"Адрес":instruction,"Адрес на русском языке":instruction}
+    # Источник места сдачи порожнего — только поле «Контейнерный сток».
+    # Инструкция и перенаправление содержат свободный текст и не должны
+    # подменять карточку точки маршрута.
+    stock_name = clean(value(cargo, "Контейнерный сток") or value(auto, "Контейнерный сток"))
+    stock = catalogs.stock(stock_name)
     user = clean(request.get("user"))
     if not user:
         raise ValueError("Не указан сотрудник, который формирует документ")
     ctx = generator.context(row, date.fromisoformat(request.get("date") or date.today().isoformat()), user, stock)
+    ctx["stock_name"] = stock_name
     if request.get("action") == "edo_options":
         return {"parties": [
             {"role": role, "name": ctx[role]["name"], "inn": ctx[role]["inn"], "kpp": ctx[role]["kpp"], "currentId": ctx[f"{role}_edo"], "options": catalogs.edo_options(ctx[role])}
