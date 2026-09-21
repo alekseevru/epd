@@ -76,6 +76,7 @@ KNOWN_POINT_ADDRESSES_BY_INN = {
     # В TMS у точки указан сокращённый адрес без индекса и маркера дома.
     # ИНН точки позволяет однозначно определить терминал Волхонский М11.
     "9705100811": "198323, Санкт-Петербург, Волхонское шоссе, д. 6",
+    "5031155564": "142461, Московская область, городской округ Богородский, г. Электроугли, территория Носовихинское шоссе, 26-й километр, д. 1",
 }
 
 KNOWN_POINT_PARTY_DETAILS_BY_INN = {
@@ -266,9 +267,12 @@ def address_attributes(text: str) -> dict:
     if region_code:
         attrs["КодРегион"] = region_code
 
-    city_match = re.search(r"(?:^|[,;]\s*)г(?:ород)?\.?\s*([^,;]+)", text, re.IGNORECASE)
+    city_match = re.search(r"(?:^|[,;]\s*)г(?:ород)?\.?(?!\w)\s*([^,;]+)", text, re.IGNORECASE)
     if city_match:
         attrs["Город"] = clean(city_match.group(1))[:50]
+    district_match = re.search(r"(?:^|[,;]\s*)р(?:айон|-н)\.?\s*([^,;]+)", text, re.IGNORECASE)
+    if district_match:
+        attrs["Район"] = clean(district_match.group(1))[:50]
 
     parts = [clean(part) for part in re.split(r"[,;]", text) if clean(part)]
     house_part_index = next(
@@ -295,6 +299,9 @@ def address_attributes(text: str) -> dict:
     street_part = next((part for part in parts if re.search(r'(?:^|\s)(?:ул(?:ица)?\.?|ш(?:оссе)?\.?|пр-кт|проспект|пр-д|проезд|пер(?:еулок)?\.?|квартал)(?:\s|$)', part, re.I)), '')
     if street_part and len(street_part) <= 50:
         attrs['Улица'] = street_part
+        kilometer_part = next((part for part in parts if re.search(r'\b\d+\s*-?й\s+километр\b', part, re.I)), '')
+        if kilometer_part and len(f"{street_part}, {kilometer_part}") <= 50:
+            attrs['Улица'] = f"{street_part}, {kilometer_part}"
         suffix_city = next((part for part in parts if re.search(r'\sг\.?$', part, re.I)), '')
         if suffix_city and 'Город' not in attrs:
             attrs['Город'] = re.sub(r'\sг\.?$', '', suffix_city, flags=re.I)[:50]
@@ -507,25 +514,40 @@ class Generator:
         truck_number = clean(value(row, "Номер автомашины", "Транспортное средство"))
         truck = self.catalogs.vehicle(truck_number) or {}
         route = clean(value(row, "Маршрут", "Маршрут груза"))
+
+        def route_point_label(raw_value):
+            return clean(re.sub(r"^\s*\([A-ZА-Я]{2}\)\s*", "", clean(raw_value), flags=re.IGNORECASE))
+
         route_names = [
-            clean(re.sub(r"^\(RU\)\s*", "", item, flags=re.IGNORECASE))
+            route_point_label(item)
             for item in re.split(r"\s*(?:->|→|—>)\s*", route)
             if clean(item)
         ]
-        loading_name = clean(value(row, "Место забора груза (Маршрут)")) or (route_names[0] if route_names else clean(value(row, "Место отправления", "Последняя точка прибытия")))
-        delivery_name = clean(value(row, "Место доставки груза (Маршрут)")) or (route_names[-1] if len(route_names) > 1 else clean(value(row, "Место прибытия", "Последняя точка прибытия", "Места дислокации грузовых единиц")))
+        explicit_loading = route_point_label(value(row, "Место забора груза (Маршрут)") or value(row, "Место отправления", "Последняя точка прибытия"))
+        explicit_delivery = route_point_label(value(row, "Место доставки груза (Маршрут)") or value(row, "Место прибытия", "Последняя точка прибытия", "Места дислокации грузовых единиц"))
+
+        def select_route_point(explicit_name, route_name):
+            explicit_point = self.catalogs.point(explicit_name)
+            route_point = self.catalogs.point(route_name)
+            if route_point and (
+                not explicit_point
+                or len(normalize_name(route_name)) > len(normalize_name(explicit_name))
+            ):
+                return route_name, route_point
+            return explicit_name or route_name, explicit_point or route_point
+
+        loading_name, loading_point = select_route_point(explicit_loading, route_names[0] if route_names else "")
+        delivery_name, delivery_point = select_route_point(explicit_delivery, route_names[-1] if len(route_names) > 1 else "")
         if not explicit_consignee and (is_agm_shushary(delivery_name) or is_ags(delivery_name)):
             consignee_name = "АГС" if is_ags(delivery_name) else "АГМ"
             consignee_company = self.catalogs.company(consignee_name)
-        loading_point = self.catalogs.point(loading_name)
-        delivery_point = self.catalogs.point(delivery_name)
 
         def point_address(point, fallback):
             point_inn = clean((point or {}).get("ИНН"))
             if point_inn in KNOWN_POINT_ADDRESSES_BY_INN:
                 return KNOWN_POINT_ADDRESSES_BY_INN[point_inn]
             if normalize_name(fallback) == normalize_name("Электроугли"):
-                return "142461, Московская область, городской округ Богородский, территория Носовихинское шоссе, 26-й километр, д. 1"
+                return "142461, Московская область, городской округ Богородский, г. Электроугли, территория Носовихинское шоссе, 26-й километр, д. 1"
             point_name = normalize_name(clean((point or {}).get("Название")) or fallback)
             if is_ags(clean((point or {}).get("Название")) or fallback):
                 return AGS_DETAILS["address"]
