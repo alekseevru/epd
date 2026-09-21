@@ -195,6 +195,70 @@ class AddressRegressions(unittest.TestCase):
         self.assertEqual(empty_loading.get("КодРегион"), "78")
         self.assertEqual(empty_loading.get("Город"), "Сестрорецк")
 
+    def test_specific_route_endpoint_wins_for_cimu3116264(self):
+        catalogs = Catalogs()
+        catalogs.points = [
+            {
+                "Номер склада и название": 'ООО "ЦТ"',
+                "Название": 'ООО "ЦТ"',
+                "ИНН": "5031155564",
+                "Адрес": "Носовихинское шоссе, 26-й километр, 1, Электроугли",
+            },
+            {
+                "Номер склада и название": "Новомосковск",
+                "Название": "Новомосковск",
+                "Адрес": "Россия, Маклец, Тульская обл., Россия, 301692",
+            },
+            {
+                "Номер склада и название": "Новомосковск P&G",
+                "Название": "Новомосковск P&G",
+                "Адрес": "301654, обл. Тульская, р-н. Новомосковский, г. Новомосковск, ш. Комсомольское, дом 64",
+            },
+        ]
+        generator = Generator(Path(__file__).parent / "resources", catalogs)
+        context = generator.context({
+            "_container": "CIMU3116264",
+            "Клиент": 'ООО "ПРОКТЕР ЭНД ГЭМБЛ-НОВОМОСКОВСК"',
+            "Исполнитель": 'ООО "АКСС ПЛЮС"',
+            "Грузополучатель": 'ООО "ПРОКТЕР ЭНД ГЭМБЛ-НОВОМОСКОВСК"',
+            "Маршрут": '(RU) ООО "ЦТ" -> (RU) Новомосковск P&G',
+            "Место забора груза (Маршрут)": '(RU) ООО "ЦТ"',
+            "Место доставки груза (Маршрут)": "Новомосковск",
+        }, date(2026, 9, 21), "Алексеев Михаил Геннадьевич", None)
+        self.assertEqual(
+            context["loading"],
+            "142461, Московская область, городской округ Богородский, г. Электроугли, территория Носовихинское шоссе, 26-й километр, д. 1",
+        )
+        self.assertEqual(
+            context["delivery"],
+            "301654, обл. Тульская, р-н. Новомосковский, г. Новомосковск, ш. Комсомольское, дом 64",
+        )
+        _, content = generator.etrn(context)
+        root = ET.fromstring(content)
+        loading = root.find(".//СвПогруз/ФАдресПогр/АдресРФ")
+        delivery = root.find(".//СвГП/АдресДостГр/АдресРФ")
+        self.assertEqual((loading.get("Индекс"), loading.get("Дом")), ("142461", "1"))
+        self.assertEqual(loading.get("Город"), "Электроугли")
+        self.assertIn("26-й километр", loading.get("Улица"))
+        self.assertEqual(
+            (delivery.get("Индекс"), delivery.get("Район"), delivery.get("Город"), delivery.get("Дом")),
+            ("301654", "Новомосковский", "Новомосковск", "64"),
+        )
+        self.assertIn("Комсомольское", delivery.get("Улица"))
+
+        _, order_content = generator.ezz(context)
+        order_root = ET.fromstring(order_content)
+        submission = order_root.find(".//ПунктПод/АдрПунктПод/Адрес/АдрРФ")
+        order_points = order_root.findall(".//АдрПункт/АдресПункт/Адрес/АдрРФ")
+        self.assertEqual((submission.get("Индекс"), submission.get("Город"), submission.get("Дом")), ("142461", "Электроугли", "1"))
+        self.assertEqual((order_points[0].get("Индекс"), order_points[0].get("Город"), order_points[0].get("Дом")), ("142461", "Электроугли", "1"))
+        self.assertEqual(
+            (order_points[1].get("Индекс"), order_points[1].get("Район"), order_points[1].get("Город"), order_points[1].get("Дом")),
+            ("301654", "Новомосковский", "Новомосковск", "64"),
+        )
+        self.assertIn("Комсомольское", order_points[1].get("Улица"))
+        self.assertNotIn("Маклец", ET.tostring(order_root, encoding="unicode"))
+
     def test_yanino_loading_owner_phone_reaches_etrn(self):
         catalogs = Catalogs()
         catalogs.points = [{
