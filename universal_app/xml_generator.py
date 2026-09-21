@@ -622,8 +622,11 @@ class Generator:
             observer.text = observer_id
             root.insert(0, observer)
         now = datetime.now()
-        consignee = ctx.get("stock_party") or TAGLEX if empty else ctx["consignee"]
-        consignee_edo = (ctx.get("stock_edo") or TAGLEX["edo"]) if empty else ctx["consignee_edo"]
+        # В порожней ЭТрН титул 3 подписывает ТАГЛЕКС, поэтому он всегда
+        # является грузополучателем. От контейнерного стока берём только
+        # физический адрес доставки терминала.
+        consignee = TAGLEX if empty else ctx["consignee"]
+        consignee_edo = TAGLEX["edo"] if empty else ctx["consignee_edo"]
         file_id = (
             f"ON_TRNACLGROT_{ctx['carrier_edo']}_{consignee_edo}_{TAGLEX['edo']}_0_"
             f"{ctx['date']:%Y%m%d}_{uuid.uuid4()}"
