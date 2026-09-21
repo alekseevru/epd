@@ -135,6 +135,37 @@ class AddressRegressions(unittest.TestCase):
             addresses = root.findall(".//АдрРФ") + root.findall(".//АдресРФ")
             self.assertTrue(any(node.get("Индекс") == "197701" and node.get("КодРегион") == "78" for node in addresses))
 
+    def test_ags_route_fallback_without_route_point_catalog(self):
+        catalogs = Catalogs()
+        catalogs.companies = [{
+            "Наименование": 'ООО "АГС"',
+            "ИНН": "7814858496",
+            "КПП": "781401001",
+        }]
+        generator = Generator(Path(__file__).parent / "resources", catalogs)
+        context = generator.context({
+            "_container": "SLLU5118861",
+            "Клиент": 'ООО "АГРЛ"',
+            "Исполнитель": "Тестовый перевозчик",
+            "Маршрут": "(RU) Бронка (ООО Феникс) -> (RU) ООО «АГС»",
+            "Место прибытия": "(RU) ООО «АГС»",
+        }, date(2026, 9, 21), "Иванов Иван Иванович", None)
+        expected = "197701, Санкт-Петербург, г. Сестрорецк, Левашовское шоссе, д. 20, стр. 1"
+        self.assertEqual(context["delivery"], expected)
+        self.assertTrue(context["delivery_point_found"])
+        _, cargo_content = generator.etrn(context)
+        cargo_root = ET.fromstring(cargo_content)
+        cargo_delivery = cargo_root.find(".//СвГП/АдресДостГр/АдресРФ")
+        self.assertEqual(cargo_delivery.get("Индекс"), "197701")
+        self.assertEqual(cargo_delivery.get("КодРегион"), "78")
+        self.assertEqual(cargo_delivery.get("Город"), "Сестрорецк")
+        _, empty_content = generator.etrn(context, empty=True)
+        empty_root = ET.fromstring(empty_content)
+        empty_loading = empty_root.find(".//СвПогруз/ФАдресПогр/АдресРФ")
+        self.assertEqual(empty_loading.get("Индекс"), "197701")
+        self.assertEqual(empty_loading.get("КодРегион"), "78")
+        self.assertEqual(empty_loading.get("Город"), "Сестрорецк")
+
     def test_yanino_loading_owner_phone_reaches_etrn(self):
         catalogs = Catalogs()
         catalogs.points = [{
