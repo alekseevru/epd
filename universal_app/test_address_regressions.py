@@ -156,6 +156,35 @@ class AddressRegressions(unittest.TestCase):
         root = ET.fromstring(content)
         self.assertEqual(root.findtext(".//СвПогруз/ВладИнфр//Контакт/Тлф"), "+78123343757")
 
+    def test_empty_etrn_uses_container_stock_point_and_inn(self):
+        catalogs = Catalogs()
+        stock = {
+            "Номер склада и название": "Терминал Волхонский М11 ИНН 9705100811",
+            "Название": "Терминал Волхонский М11 ИНН 9705100811",
+            "Роли": "Контейнерный сток",
+            "ИНН": "9705100811",
+            "Адрес на русском языке": "г. Санкт-Петербург, Волхонское шоссе, 6",
+        }
+        catalogs.points = [stock]
+        generator = Generator(Path(__file__).parent / "resources", catalogs)
+        context = generator.context({
+            "_container": "SLLU5118861",
+            "Клиент": 'ООО "АГРЛ"',
+            "Исполнитель": "Тестовый перевозчик",
+            "Маршрут": "(RU) Бронка (ООО Феникс) -> (RU) ООО «АГС»",
+            "Инструкция на сдачу порожнего": 'Терминал "Волхонский М11", Адрес: неверный адрес',
+        }, date(2026, 9, 2), "Иванов Иван Иванович", stock)
+        self.assertEqual(context["stock_party"]["inn"], "9705100811")
+        _, content = generator.etrn(context, empty=True)
+        root = ET.fromstring(content)
+        consignee = root.find(".//СвГП//СвЮЛУч")
+        self.assertEqual(consignee.get("ИННЮЛ"), "9705100811")
+        self.assertIn("Волхонский", consignee.get("НаимОрг"))
+        address = root.find(".//СвГП/АдресДостГр/АдресРФ")
+        self.assertEqual(address.get("КодРегион"), "78")
+        self.assertIn("Волхонское шоссе", address.get("Улица"))
+        self.assertNotIn("неверный адрес", ET.tostring(root, encoding="unicode"))
+
     def test_forwarding_order_uses_valid_container_structure_and_services(self):
         party_data = {
             "name": 'ООО "Тест"',
