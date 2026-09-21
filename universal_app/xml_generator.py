@@ -72,6 +72,12 @@ KNOWN_POINT_PHONES = (
     (("ЭЛЕКТРОУГЛИ",), "+79859674145"),
 )
 
+KNOWN_POINT_ADDRESSES_BY_INN = {
+    # В TMS у точки указан сокращённый адрес без индекса и маркера дома.
+    # ИНН точки позволяет однозначно определить терминал Волхонский М11.
+    "9705100811": "198323, Санкт-Петербург, Волхонское шоссе, д. 6",
+}
+
 ADDRESS_PART_PATTERNS = {
     "Индекс": r"(?<!\d)(\d{6})(?!\d)",
     "Дом": r"(?:^|[,;]\s*|\s)(?:д(?:ом)?\.?)(?!\w)\s*(?:№\s*)?([\w/-]+)",
@@ -502,6 +508,9 @@ class Generator:
         delivery_point = self.catalogs.point(delivery_name)
 
         def point_address(point, fallback):
+            point_inn = clean((point or {}).get("ИНН"))
+            if point_inn in KNOWN_POINT_ADDRESSES_BY_INN:
+                return KNOWN_POINT_ADDRESSES_BY_INN[point_inn]
             if normalize_name(fallback) == normalize_name("Электроугли"):
                 return "142461, Московская область, городской округ Богородский, территория Носовихинское шоссе, 26-й километр, д. 1"
             point_name = normalize_name(clean((point or {}).get("Название")) or fallback)
@@ -617,7 +626,8 @@ class Generator:
         _set_contract(info.find("СвЗак"), ctx.get("client_contract"), (TAGLEX["inn"], ctx["client"]["inn"]))
         _set_legal(info.find("СвГП"), consignee)
         delivery = (
-            clean((ctx["stock"] or {}).get("Адрес на русском языке") or (ctx["stock"] or {}).get("Адрес"))
+            clean((ctx.get("stock_party") or {}).get("address"))
+            or clean((ctx["stock"] or {}).get("Адрес на русском языке") or (ctx["stock"] or {}).get("Адрес"))
             if empty else ctx["delivery"]
         )
         _set_address(info.find("СвГП/АдресДостГр"), delivery, "АдресРФ")

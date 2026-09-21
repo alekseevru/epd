@@ -212,8 +212,10 @@ class AddressRegressions(unittest.TestCase):
         self.assertEqual(consignee.get("ИННЮЛ"), "9705100811")
         self.assertIn("Волхонский", consignee.get("НаимОрг"))
         address = root.find(".//СвГП/АдресДостГр/АдресРФ")
+        self.assertEqual(address.get("Индекс"), "198323")
         self.assertEqual(address.get("КодРегион"), "78")
         self.assertIn("Волхонское шоссе", address.get("Улица"))
+        self.assertEqual(address.get("Дом"), "6")
         self.assertNotIn("неверный адрес", ET.tostring(root, encoding="unicode"))
 
     def test_forwarding_order_uses_valid_container_structure_and_services(self):
