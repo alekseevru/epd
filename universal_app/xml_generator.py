@@ -78,6 +78,15 @@ KNOWN_POINT_ADDRESSES_BY_INN = {
     "9705100811": "198323, Санкт-Петербург, Волхонское шоссе, д. 6",
 }
 
+KNOWN_POINT_PARTY_DETAILS_BY_INN = {
+    "9705100811": {
+        "name": 'ООО "КОНТВЭЛЛ"',
+        "inn": "9705100811",
+        "kpp": "772501001",
+        "phone": "+78126039299",
+    },
+}
+
 ADDRESS_PART_PATTERNS = {
     "Индекс": r"(?<!\d)(\d{6})(?!\d)",
     "Дом": r"(?:^|[,;]\s*|\s)(?:д(?:ом)?\.?)(?!\w)\s*(?:№\s*)?([\w/-]+)",
@@ -536,6 +545,8 @@ class Generator:
             if point:
                 result["address"] = point_address(point, result.get("address"))
                 result["phone"] = normalize_phone(point.get("Номер телефона")) or known_point_phone(point) or result.get("phone", "")
+            if inn in KNOWN_POINT_PARTY_DETAILS_BY_INN:
+                result.update(KNOWN_POINT_PARTY_DETAILS_BY_INN[inn])
             return result
 
         stock_party = point_owner(stock)
@@ -611,8 +622,11 @@ class Generator:
             observer.text = observer_id
             root.insert(0, observer)
         now = datetime.now()
-        consignee = ctx.get("stock_party") or TAGLEX if empty else ctx["consignee"]
-        consignee_edo = (ctx.get("stock_edo") or TAGLEX["edo"]) if empty else ctx["consignee_edo"]
+        # В порожней ЭТрН титул 3 подписывает ТАГЛЕКС, поэтому он всегда
+        # является грузополучателем. От контейнерного стока берём только
+        # физический адрес доставки терминала.
+        consignee = TAGLEX if empty else ctx["consignee"]
+        consignee_edo = TAGLEX["edo"] if empty else ctx["consignee_edo"]
         file_id = (
             f"ON_TRNACLGROT_{ctx['carrier_edo']}_{consignee_edo}_{TAGLEX['edo']}_0_"
             f"{ctx['date']:%Y%m%d}_{uuid.uuid4()}"
