@@ -95,6 +95,10 @@ def normalize_phone(value) -> str:
     return "+" + digits if digits else ""
 
 
+def normalize_vehicle_number(value) -> str:
+    return re.sub(r"[\s/]+", "", clean(value))
+
+
 def known_party_phone(name: str) -> str:
     return KNOWN_PARTY_PHONES_BY_NAME.get(normalize_name(name), "")
 
@@ -540,10 +544,12 @@ class Generator:
         planned_departure_datetime = _as_datetime(
             value(row, "Плановая дата отправления"), datetime.combine(trip_date, time(9))
         )
+        transport_date = planned_departure_datetime.date()
         order_date = min(trip_date, planned_departure_datetime.date())
         return {
             "container": container,
             "date": trip_date,
+            "transport_date": transport_date,
             "user": user,
             "client": party(client_company, client_name),
             "client_edo": self.catalogs.edo_id(client_company),
@@ -565,9 +571,9 @@ class Generator:
             # В справочнике TMS дата выдачи ВУ хранится в поле
             # «Дата окончания доверенности» по согласованной бизнес-логике.
             "driver_license_issue_date": _as_datetime(driver.get("Дата окончания доверенности"), None),
-            "truck_number": truck_number or clean(truck.get("Государственный номер")),
+            "truck_number": normalize_vehicle_number(truck_number or truck.get("Государственный номер")),
             "truck_brand": clean(truck.get("Марка")) or "Тягач",
-            "trailer": clean(value(row, "Номер прицепа")),
+            "trailer": normalize_vehicle_number(value(row, "Номер прицепа")),
             "weight": clean(value(row, "Вес брутто")) or "0",
             "seals": ", ".join(dict.fromkeys(filter(None, [clean(value(row, "Номер пломбы")), clean(value(row, "Номер пломбы 2"))]))),
             "seal_numbers": list(dict.fromkeys(filter(None, [clean(value(row, "Номер пломбы")), clean(value(row, "Номер пломбы 2"))]))),
@@ -617,8 +623,9 @@ class Generator:
         doc.set("ДатИнфГО", now.strftime("%d.%m.%Y"))
         doc.set("ВрИнфГО", now.strftime("%H:%M:%S"))
         info = doc.find("СодИнфГО")
-        info.set("НомерТрН", f"{ctx['date']:%Y%m%d}-{ctx['container']}-{'EMPTY' if empty else 'CARGO'}")
-        info.set("ДатаТрН", ctx["date"].strftime("%d.%m.%Y"))
+        transport_date = ctx.get("transport_date") or ctx["date"]
+        info.set("НомерТрН", f"{transport_date:%Y%m%d}-{ctx['container']}-{'EMPTY' if empty else 'CARGO'}")
+        info.set("ДатаТрН", transport_date.strftime("%d.%m.%Y"))
         info.set("НомЗак", ctx["order_number"])
         info.set("ДатаЗак", ctx["order_date"])
         _set_legal(info.find("СвГО"), TAGLEX)

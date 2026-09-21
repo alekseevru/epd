@@ -5,7 +5,7 @@ from pathlib import Path
 from address_xml import known_gar, complete_gar
 from data_sources import Catalogs
 from server_generator import Generator as ServerGenerator
-from xml_generator import Generator, TAGLEX, address_attributes, _set_address, _set_contract, cargo_packaging, known_point_phone, party
+from xml_generator import Generator, TAGLEX, address_attributes, _set_address, _set_contract, cargo_packaging, known_point_phone, normalize_vehicle_number, party
 
 
 class AddressRegressions(unittest.TestCase):
@@ -69,6 +69,35 @@ class AddressRegressions(unittest.TestCase):
     def test_cargo_packaging_rules(self):
         self.assertEqual(cargo_packaging({"name": 'ООО "СК Трейд"'}), ("короба", "00"))
         self.assertEqual(cargo_packaging({"name": 'ООО "Другой клиент"'}), ("-", "00"))
+
+    def test_vehicle_numbers_remove_slashes_and_spaces(self):
+        self.assertEqual(normalize_vehicle_number("НС819/ 53"), "НС81953")
+        self.assertEqual(normalize_vehicle_number("АВ 12 / 34"), "АВ1234")
+
+        generator = Generator(Path(__file__).parent / "resources", Catalogs())
+        context = generator.context({
+            "_container": "TEST1234567",
+            "Клиент": "Тестовый клиент",
+            "Исполнитель": "Тестовый перевозчик",
+            "Номер автомашины": "НС819/ 53",
+            "Номер прицепа": "АВ 12 / 34",
+        }, date(2026, 9, 21), "Иванов Иван Иванович", None)
+        self.assertEqual(context["truck_number"], "НС81953")
+        self.assertEqual(context["trailer"], "АВ1234")
+
+    def test_late_etrn_uses_transport_date_in_number(self):
+        generator = Generator(Path(__file__).parent / "resources", Catalogs())
+        context = generator.context({
+            "_container": "FESU5281584",
+            "Клиент": "Тестовый клиент",
+            "Исполнитель": "Тестовый перевозчик",
+            "Плановая дата отправления": "21.09.2026 10:00",
+        }, date(2026, 9, 25), "Иванов Иван Иванович", None)
+        _, content = generator.etrn(context)
+        root = ET.fromstring(content)
+        info = root.find(".//СодИнфГО")
+        self.assertEqual(info.get("НомерТрН"), "20260921-FESU5281584-CARGO")
+        self.assertEqual(info.get("ДатаТрН"), "21.09.2026")
 
     def test_known_reference_fallbacks(self):
         self.assertEqual(known_point_phone({"Название": "Силикатная"}), "+74991879088")
