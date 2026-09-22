@@ -28,6 +28,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="ru">
+      <head><link rel="preload" as="image" href="/agr-logo.png" /></head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >

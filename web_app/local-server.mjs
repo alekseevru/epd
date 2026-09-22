@@ -306,6 +306,37 @@ let generatorWorker, workerBuffer="", requestSequence=0;
 const pending=new Map();
 const garCacheFile=path.join(root,"work","gar-addresses.json");
 const edoPreferencesFile=path.join(root,"work","edo-preferences.json");
+const employeeDirectoryFile=path.join(root,"work","employees.json");
+const defaultEmployees=[
+  "Алексеев Михаил Геннадьевич",
+  "Воронцов Аркадий Петрович",
+  "Кузьмин Денис Викторович",
+  "Петров Дмитрий Александрович",
+  "Якимчук Виталий Алексеевич",
+  "Тарасова Олеся Александровна",
+  "Горбовская Мария Алексеевна",
+  "Князева Есения Альбертовна",
+  "Фандеева Дарья Валерьевна",
+  "Панамарева Анастасия Владимировна",
+  "Светашова Каролина Олеговна",
+  "Федоров Владимир Алексеевич",
+  "Богданова Юлия Игоревна",
+  "Кулинич Наталья Алексеевна",
+  "Першина Ольга Геннадьевна",
+  "Сергеев Павел Николаевич",
+  "Шогенов Эдуард Анзорович",
+  "Вдовина Людмила Геннадьевна",
+  "Ящук Андрей Викторович",
+  "Дудкина Мария Александровна",
+  "Чепогузов Роман Петрович",
+  "Сафронова Екатерина Александровна",
+  "Осипова Юлия Алексеевна",
+  "Левкина Вера Ивановна",
+  "Шестаков Сергей Алексеевич"
+];
+const normalizeEmployee=value=>String(value||"").trim().replace(/\s+/g," ");
+const loadEmployees=()=>{try{const saved=JSON.parse(fs.readFileSync(employeeDirectoryFile,"utf8"));return [...new Set([...defaultEmployees,...(Array.isArray(saved)?saved:[])].map(normalizeEmployee).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"ru"));}catch{return [...defaultEmployees].sort((a,b)=>a.localeCompare(b,"ru"));}};
+const saveEmployee=name=>{const employees=loadEmployees();if(!employees.some(item=>item.toLocaleLowerCase("ru")===name.toLocaleLowerCase("ru"))){employees.push(name);employees.sort((a,b)=>a.localeCompare(b,"ru"));fs.mkdirSync(path.dirname(employeeDirectoryFile),{recursive:true});fs.writeFileSync(employeeDirectoryFile,JSON.stringify(employees,null,2),"utf8");}return employees;};
 const loadEdoPreferences=()=>{try{return JSON.parse(fs.readFileSync(edoPreferencesFile,"utf8"));}catch{return {};}};
 const saveEdoPreferences=value=>{fs.mkdirSync(path.dirname(edoPreferencesFile),{recursive:true});fs.writeFileSync(edoPreferencesFile,JSON.stringify(value,null,2),"utf8");};
 const edoPreferenceKey=party=>`${String(party.inn||"").trim()}|${String(party.kpp||"").trim()}`;
@@ -389,6 +420,23 @@ const types = { ".css":"text/css; charset=utf-8", ".js":"text/javascript; charse
 
 const server = http.createServer((request, response) => {
   const url = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
+  if(request.method==="GET"&&url.pathname==="/agr-logo.png"){
+    const logoFile=path.join(root,"public","agr-logo.png");
+    response.writeHead(200,{"Content-Type":"image/png","Cache-Control":"public, max-age=86400"});
+    fs.createReadStream(logoFile).pipe(response);return;
+  }
+  if(request.method==="GET"&&url.pathname==="/api/employees"){
+    response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});
+    response.end(JSON.stringify({employees:loadEmployees()}));return;
+  }
+  if(request.method==="POST"&&url.pathname==="/api/employees"){
+    let body="";request.setEncoding("utf8");request.on("data",chunk=>body+=chunk);request.on("end",()=>{try{
+      const name=normalizeEmployee(JSON.parse(body).name);
+      if(name.length>120||!/^\S+(?:\s+\S+){1,3}$/.test(name))throw new Error("Укажите фамилию и имя сотрудника");
+      const employees=saveEmployee(name);
+      response.writeHead(200,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({employees,name}));
+    }catch(error){response.writeHead(400,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({error:error.message||"Не удалось сохранить сотрудника"}));}});return;
+  }
   if (request.method === "GET" && url.pathname === "/api/kontur/status") {
     const config=konturConfig(); const tokens=loadKonturTokens();
     response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});
