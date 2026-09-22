@@ -98,6 +98,8 @@ export default function Workspace() {
   const [generating, setGenerating] = useState("");
   const [outputFolder, setOutputFolder] = useState("");
   const [employee, setEmployee] = useState("Алексеев Михаил Геннадьевич");
+  const [employees,setEmployees]=useState<string[]>([]);
+  const [savingEmployee,setSavingEmployee]=useState(false);
   const [bulkProgress, setBulkProgress] = useState("");
   const [statusModalOpen, setStatusModalOpen] = useState(false);
   const [docStatuses, setDocStatuses] = useState<Record<string,{state:"queued"|"working"|"saved"|"error";text:string}>>({});
@@ -113,6 +115,15 @@ export default function Workspace() {
   const restoredRef = useRef(false);
   const warningResolverRef=useRef<((confirmed:boolean)=>void)|null>(null);
   const [warningDialog,setWarningDialog]=useState<{open:boolean;container:string;kind:"cargo"|"empty"|"order";warnings:string[]}>({open:false,container:"",kind:"cargo",warnings:[]});
+  useEffect(()=>{void fetch("/api/employees",{cache:"no-store"}).then(async response=>{if(!response.ok)throw new Error("Не удалось загрузить сотрудников");const result=await response.json() as {employees:string[]};setEmployees(result.employees||[]);}).catch(()=>setMessage("Не удалось загрузить справочник сотрудников."));},[]);
+  const saveEmployee=async()=>{
+    const name=employee.trim().replace(/\s+/g," ");
+    if(!/^\S+(?:\s+\S+){1,3}$/.test(name)){setMessage("Укажите фамилию и имя сотрудника.");return;}
+    setSavingEmployee(true);
+    try{const response=await fetch("/api/employees",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name})});const result=await response.json() as {employees?:string[];error?:string};if(!response.ok)throw new Error(result.error||"Не удалось сохранить сотрудника");setEmployees(result.employees||[]);setEmployee(name);setMessage(`Сотрудник ${name} сохранён в справочнике.`);}
+    catch(error){setMessage(error instanceof Error?error.message:"Не удалось сохранить сотрудника");}
+    finally{setSavingEmployee(false);}
+  };
   const requestWarningConfirmation=(container:string,kind:"cargo"|"empty"|"order",warnings:string[])=>new Promise<boolean>(resolve=>{
     warningResolverRef.current=resolve;
     setWarningDialog({open:true,container,kind,warnings});
@@ -417,7 +428,7 @@ export default function Workspace() {
 
       {ready && <>
         <section className={styles.search}><label><strong>Номера контейнеров</strong><textarea value={query} onChange={(event) => setQuery(event.target.value)} placeholder={'WEDU8636223\nTGBU5962912'}/></label><button onClick={search}>Найти перевозки →</button></section>
-        {results.length > 0 && <><section className={styles.bulkBar}><div><strong>Скачать XML документов</strong><small>{outputFolder ? "Папка: " + outputFolder : "Выберите папку для сохранения XML. Передача в Контур выполняется отдельными кнопками «Контур»."}</small></div><label className={styles.employeeField}><span>Сотрудник для XML</span><input value={employee} onChange={event=>setEmployee(event.target.value)} placeholder="Фамилия Имя Отчество"/><small>Будет указан работником погрузки и подписантом</small></label><button className={styles.folderButton} onClick={chooseOutputFolder}>Выбрать папку</button><button className={styles.bulkButton} disabled={Boolean(generating)||results.some(trip=>{const state=edoChoices[trip._container];return !state||state.loading||Boolean(state.error)||!state.parties.length||state.parties.some(party=>!party.selectedId);})} onClick={generateAll}>{generating === "all" ? (bulkProgress || "Формируем…") : "Скачать все XML"}</button></section><section className={styles.results}><div className={styles.tableWrap}><table><thead><tr><th>Статус</th><th>Документы</th><th>Статус ЭДО ЭТрН</th><th>Контейнер</th><th>Клиент / грузополучатель</th><th>Перевозчик</th><th>Маршрут и адреса</th><th>Погрузка / выгрузка</th><th>Контейнерный сток</th><th>Водитель и ТС</th></tr></thead><tbody>{results.map((trip) => {
+        {results.length > 0 && <><section className={styles.bulkBar}><div><strong>Скачать XML документов</strong><small>{outputFolder ? "Папка: " + outputFolder : "Выберите папку для сохранения XML. Передача в Контур выполняется отдельными кнопками «Контур»."}</small></div><div className={styles.employeeField}><label htmlFor="employee-xml">Сотрудник для XML</label><input id="employee-xml" list="employee-options" value={employee} onChange={event=>setEmployee(event.target.value)} placeholder="Введите ФИО или выберите из списка" autoComplete="off"/><datalist id="employee-options">{employees.map(name=><option key={name} value={name}/>)}</datalist><button type="button" onClick={()=>void saveEmployee()} disabled={savingEmployee||!employee.trim()||employees.some(name=>name.toLocaleLowerCase("ru")===employee.trim().replace(/\s+/g," ").toLocaleLowerCase("ru"))}>{savingEmployee?"Сохраняем…":"Добавить в справочник"}</button><small>Выбранное ФИО попадёт в XML как работник погрузки и подписант. Добавление сохраняет его для следующих документов.</small></div><button className={styles.folderButton} onClick={chooseOutputFolder}>Выбрать папку</button><button className={styles.bulkButton} disabled={Boolean(generating)||results.some(trip=>{const state=edoChoices[trip._container];return !state||state.loading||Boolean(state.error)||!state.parties.length||state.parties.some(party=>!party.selectedId);})} onClick={generateAll}>{generating === "all" ? (bulkProgress || "Формируем…") : "Скачать все XML"}</button></section><section className={styles.results}><div className={styles.tableWrap}><table><thead><tr><th>Статус</th><th>Документы</th><th>Статус ЭДО ЭТрН</th><th>Контейнер</th><th>Клиент / грузополучатель</th><th>Перевозчик</th><th>Маршрут и адреса</th><th>Погрузка / выгрузка</th><th>Контейнерный сток</th><th>Водитель и ТС</th></tr></thead><tbody>{results.map((trip) => {
           const cargo = trip._cargo; const auto = trip._auto;
           const warehouse = value(cargo,"Место доставки на склад","Место доставки груза (Маршрут заказа)","Адрес доставки","Место прибытия") || value(auto,"Место прибытия");
           const stock = value(cargo,"Контейнерный сток") || value(auto,"Контейнерный сток");
