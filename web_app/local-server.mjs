@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import * as XLSX from "xlsx";
-import { syncTms, refreshTmsContainers, contractRowsToCatalog } from "./tms-sync.mjs";
+import { syncTms, contractRowsToCatalog } from "./tms-sync.mjs";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const appPackage = JSON.parse(fs.readFileSync(path.join(root,"package.json"),"utf8"));
@@ -18,7 +18,6 @@ const vinextCli = path.join(root, "node_modules", "vinext", "dist", "cli.js");
 const appPort = 3001;
 const publicPort = Number(process.env.PORT || 3000);
 const cacheRoot = path.join(root,"work","source-cache");
-const credentialsFile = path.join(root,"work","tms-credentials.json");
 const konturTokenFile = path.join(root,"work","kontur-tokens.json");
 const referenceRoot = process.env.AGR_REFERENCES_DIR || path.join(root,"..","data","references");
 const konturIdentityUrl = "https://identity.kontur.ru";
@@ -284,15 +283,6 @@ function sourceStatus() {
   }));
 }
 
-function readTmsCredentials() {
-  if (process.env.TMS_LOGIN && process.env.TMS_PASSWORD) return {login:process.env.TMS_LOGIN,password:process.env.TMS_PASSWORD};
-  if (!fs.existsSync(credentialsFile)) return null;
-  const config = JSON.parse(fs.readFileSync(credentialsFile,"utf8").replace(/^\uFEFF/,""));
-  const command = "$c=Get-Content -Raw $env:TMS_CREDENTIALS|ConvertFrom-Json;$s=ConvertTo-SecureString $c.password;$b=[Runtime.InteropServices.Marshal]::SecureStringToBSTR($s);try{[Runtime.InteropServices.Marshal]::PtrToStringBSTR($b)}finally{[Runtime.InteropServices.Marshal]::ZeroFreeBSTR($b)}";
-  const result = spawnSync("powershell.exe",["-NoProfile","-Command",command],{encoding:"utf8",env:{...process.env,TMS_CREDENTIALS:credentialsFile},windowsHide:true});
-  if (result.status !== 0) throw new Error("Не удалось прочитать сохранённый пароль TMS");
-  return {login:config.login,password:result.stdout.trim()};
-}
 
 const app = spawn(process.execPath, [vinextCli, "start", "--hostname", "127.0.0.1", "--port", String(appPort)], {
   cwd: root,
@@ -401,20 +391,7 @@ function restartGeneratorWorker(){
 }
 startGeneratorWorker();
 
-const tmsCacheMaxAge=Number(process.env.TMS_CACHE_MAX_AGE_HOURS||6)*3_600_000;
-let backgroundTmsSync=null;
-function tmsTransportCacheIsStale(){
-  const files=[path.join(cacheRoot,"cargo.json"),path.join(cacheRoot,"auto.json")];
-  return files.some(file=>!fs.existsSync(file)||Date.now()-fs.statSync(file).mtimeMs>tmsCacheMaxAge);
-}
-function refreshStaleTmsCache(){
-  if(backgroundTmsSync||!tmsTransportCacheIsStale())return backgroundTmsSync;
-  let credentials;try{credentials=readTmsCredentials();}catch{return null;}if(!credentials)return null;
-  backgroundTmsSync=syncTms({...credentials,cacheDir:cacheRoot,referenceDir:referenceRoot})
-    .then(()=>restartGeneratorWorker()).catch(error=>console.error("Фоновое обновление TMS:",error.message)).finally(()=>{backgroundTmsSync=null;});
-  return backgroundTmsSync;
-}
-setTimeout(()=>void refreshStaleTmsCache(),1_000);
+// TMS is refreshed only on an explicit request with personal credentials.
 
 const types = { ".css":"text/css; charset=utf-8", ".js":"text/javascript; charset=utf-8", ".map":"application/json", ".png":"image/png", ".jpg":"image/jpeg", ".svg":"image/svg+xml", ".woff2":"font/woff2" };
 
@@ -526,21 +503,14 @@ const server = http.createServer((request, response) => {
     response.end(JSON.stringify({version:appPackage.version,build:appBuild}));return;
   }
   if (request.method === "GET" && url.pathname === "/api/tms-status") {
-    const configured=Boolean((process.env.TMS_LOGIN&&process.env.TMS_PASSWORD)||fs.existsSync(credentialsFile));
+    const configured=false; // No shared TMS login.
     response.writeHead(200,{"Content-Type":"application/json; charset=utf-8"});
-    response.end(JSON.stringify({configured,sources:sourceStatus()})); return;
+    response.end(JSON.stringify({configured,requiresCredentials:true,sources:sourceStatus()})); return;
   }
   if (request.method === "POST" && url.pathname === "/api/trips/search") {
     let body="";request.setEncoding("utf8");request.on("data",chunk=>body+=chunk);request.on("end",()=>void(async()=>{try{
       const payload=JSON.parse(body||"{}");if(!Array.isArray(payload.containers))throw new Error("Не переданы номера контейнеров");
       let result=await sendGeneratorRequest({...payload,action:"search_trips"});if(result.error)throw new Error(result.error);
-      const missing=(result.items||[]).filter(item=>item.missingCargo||item.missingAuto).map(item=>item.container);
-      if(missing.length){
-        let credentials;try{credentials=readTmsCredentials();}catch{}
-        if(credentials){
-          try{await refreshTmsContainers({...credentials,cacheDir:cacheRoot,containers:missing});restartGeneratorWorker();result=await sendGeneratorRequest({...payload,action:"search_trips"});if(result.error)throw new Error(result.error);}catch{}
-        }
-      }
       response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify(result));
     }catch(error){response.writeHead(400,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({error:error.message||"Не удалось выполнить поиск"}));}})());return;
   }
@@ -562,8 +532,9 @@ const server = http.createServer((request, response) => {
       response.writeHead(200,{"Content-Type":"application/x-ndjson; charset=utf-8","Cache-Control":"no-cache"});
       const send=(payload)=>response.write(JSON.stringify(payload)+"\n");
       try {
-        const supplied=body?JSON.parse(body):{}; const credentials=supplied.login&&supplied.password?supplied:readTmsCredentials();
-        if(!credentials) throw new Error("Укажите логин и пароль TMS");
+        const supplied=body?JSON.parse(body):{};
+        const credentials={login:typeof supplied.login==="string"?supplied.login.trim():"",password:typeof supplied.password==="string"?supplied.password:""};
+        if(!credentials.login||!credentials.password) throw new Error("Укажите свой логин и пароль TMS");
         fs.mkdirSync(referenceRoot,{recursive:true});
         const result=await syncTms({...credentials,cacheDir:cacheRoot,referenceDir:referenceRoot,onStatus:(key,state,message,details={})=>send({type:"status",key,state,message,...details})});
         send({type:"status",key:"apply",state:"working",message:"Перезагружаем справочники…"}); restartGeneratorWorker();
