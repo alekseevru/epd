@@ -346,7 +346,8 @@ def _set_legal(node: ET.Element | None, data: dict):
             legal.set("КПП", data["kpp"])
     address = node.find(".//Адрес")
     if address is not None:
-        _set_address(address, data.get("address", ""), gar=data.get('gar'))
+        legal_gar = known_gar(data.get("address", "")) if clean(data.get("inn")) == TAGLEX["inn"] else None
+        _set_address(address, data.get("address", ""), gar=data.get('gar') or legal_gar)
     contact = node.find(".//Контакт")
     contact_tag = "Контакт"
     if contact is None:

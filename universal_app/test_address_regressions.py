@@ -28,6 +28,24 @@ class AddressRegressions(unittest.TestCase):
             self.assertEqual(len(wrapper.findall('АдрФИАС/Здание')), 2)
             self.assertIsNotNone(wrapper.find('АдрФИАС/ЭлУлДорСети'))
 
+    def test_taglex_fias_in_order_and_both_etrn_types(self):
+        generator = Generator(Path(__file__).parent / "resources", Catalogs())
+        context = generator.context({
+            "_container": "FESU5281584",
+            "Клиент": "Тестовый клиент",
+            "Исполнитель": "Тестовый перевозчик",
+        }, date(2026, 9, 23), "Иванов Иван Иванович", None)
+        expected_fias = "afd01ac7-f53d-4eee-91af-ab03b25a5d4a"
+        for empty in (False, True):
+            _, content = generator.etrn(context, empty=empty)
+            root = ET.fromstring(content)
+            self.assertEqual(root.find(".//СвГО//Адрес/АдрФИАС").get("ИдНом"), expected_fias)
+            if empty:
+                self.assertEqual(root.find(".//СвГП//Адрес/АдрФИАС").get("ИдНом"), expected_fias)
+        _, content = generator.ezz(context)
+        root = ET.fromstring(content)
+        self.assertEqual(root.find(".//СвГО/Адрес/АдрФИАС").get("ИдНом"), expected_fias)
+
     def test_incomplete_gar_fallback(self):
         text = '173008, Новгородская обл, Великий Новгород г, Магистральная ул, дом № 11/13'
         wrapper = ET.Element('Адрес')
