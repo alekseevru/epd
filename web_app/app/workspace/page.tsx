@@ -196,11 +196,17 @@ export default function Workspace() {
   }
 
   const updateFromTms = async () => {
+    if(!tmsLogin.trim()||!tmsPassword){
+      setMessage("Введите свой логин и пароль TMS перед обновлением.");
+      document.getElementById("tms-credentials")?.setAttribute("open","");
+      document.getElementById(tmsLogin.trim()?"tms-password":"tms-login")?.focus();
+      return;
+    }
     const stageKeys=["login","cargo","auto","companies","vehicles","drivers","points","contracts","apply"];
     const initial:Record<string,{state:"queued";message:string}>={}; stageKeys.forEach(key=>initial[key]={state:"queued",message:"Ожидает"});
     setTmsStatuses(initial); setTmsModalOpen(true); setTmsBusy(true); setMessage("Обновляем данные из TMS…");
     try {
-      const response=await fetch("/api/tms-update",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(tmsLogin && tmsPassword ? {login:tmsLogin,password:tmsPassword} : {})});
+      const response=await fetch("/api/tms-update",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({login:tmsLogin.trim(),password:tmsPassword})});
       if(!response.ok||!response.body) throw new Error("Не удалось запустить обновление TMS");
       const reader=response.body.getReader(); const decoder=new TextDecoder(); let buffer=""; let completeResult:Record<string,number>|null=null;
       const processLine=(line:string)=>{if(!line.trim())return;const event=JSON.parse(line);if(event.type==="status")setTmsStatuses(current=>({...current,[event.key]:{state:event.state,message:event.message,count:event.count,progress:event.progress}}));if(event.type==="fatal")throw new Error(event.error);if(event.type==="complete")completeResult=event.result;};
@@ -212,7 +218,7 @@ export default function Workspace() {
       setCargoSource(source("cargo","TMS · Грузы текущие"));setAutoSource(source("auto","TMS · ТТН / CMR"));setPointsSource(source("points","TMS · Точки маршрута"));setResults([]);
       setMessage("Данные и справочники TMS успешно обновлены");
     } catch(error) { const message=error instanceof Error?error.message:"Ошибка обновления TMS";setMessage(message);setTmsStatuses(current=>({...current,apply:{state:"error",message}})); }
-    finally { setTmsBusy(false); }
+    finally { setTmsBusy(false); setTmsPassword(""); }
   };
 
   const handleFile = (kind: "cargo" | "auto" | "points") => (event: ChangeEvent<HTMLInputElement>) => {
@@ -415,7 +421,7 @@ export default function Workspace() {
             <article key={title} className={source?styles.sourceReady:styles.sourceMissing}><b>{source?"✓":"—"}</b><span><strong>{title}</strong><small>{source?`${source.count.toLocaleString("ru-RU")} строк · ${source.origin}`:"Нет сохранённых данных"}</small>{source?.updatedAt&&<em>Обновлено {new Date(source.updatedAt).toLocaleString("ru-RU")}</em>}</span></article>
           )}
         </div>
-        <details className={styles.tmsCredentials}><summary>Данные входа TMS</summary><p>Заполняйте, только если доступ не настроен администратором сервера. Пароль не сохраняется в браузере.</p><div><label><span>Логин</span><input autoComplete="username" value={tmsLogin} onChange={event=>setTmsLogin(event.target.value)} placeholder="Логин TMS"/></label><label><span>Пароль</span><input type="password" autoComplete="current-password" value={tmsPassword} onChange={event=>setTmsPassword(event.target.value)} placeholder="Пароль TMS"/></label></div></details>
+        <details id="tms-credentials" className={styles.tmsCredentials} open><summary>Вход в TMS под своей учётной записью</summary><p>Для обновления введите свой логин и пароль TMS. Пароль используется только для текущего обновления и затем очищается.</p><div><label><span>Ваш логин TMS</span><input id="tms-login" autoComplete="username" value={tmsLogin} onChange={event=>setTmsLogin(event.target.value)} placeholder="Ваш логин TMS" disabled={tmsBusy}/></label><label><span>Ваш пароль TMS</span><input id="tms-password" type="password" autoComplete="current-password" value={tmsPassword} onChange={event=>setTmsPassword(event.target.value)} placeholder="Ваш пароль TMS" disabled={tmsBusy}/></label></div></details>
       </section>
         <details className={styles.manualPanel}><summary>Ручная загрузка и восстановление</summary><p>Используйте этот раздел, только если TMS или API Диадока временно недоступны.</p><div><button onClick={() => cargoRef.current?.click()}><strong>Реестр грузов</strong><small>{cargoSource?.name ?? "Выбрать OPERATION_UNIT"}</small></button><button onClick={() => autoRef.current?.click()}><strong>ТТН / CMR</strong><small>{autoSource?.name ?? "Выбрать OPERATION_SUB_DOC"}</small></button><button onClick={() => pointsRef.current?.click()}><strong>Точки маршрута</strong><small>{pointsSource?.name ?? "Выбрать LIST_WAREHOUSE"}</small></button><button onClick={()=>edoRef.current?.click()}><strong>Контрагенты ЭДО</strong><small>{edoSource?.count?`${edoSource.count.toLocaleString("ru-RU")} строк`:edoSource?.name??"Загрузить counteragents.csv"}</small></button><button onClick={()=>contractsRef.current?.click()}><strong>Договоры</strong><small>Загрузить LIST_CONTRACTS.xlsx или contracts.json</small></button><button className={styles.resetButton} onClick={resetSources}>Сбросить локальную базу</button></div><input ref={cargoRef} hidden type="file" accept=".xlsx,.xls" onChange={handleFile("cargo")}/><input ref={autoRef} hidden type="file" accept=".xlsx,.xls" onChange={handleFile("auto")}/><input ref={pointsRef} hidden type="file" accept=".xlsx,.xls" onChange={handleFile("points")}/><input ref={edoRef} hidden type="file" accept=".csv,text/csv" onChange={handleEdoFile}/><input ref={contractsRef} hidden type="file" accept=".xlsx,.xls,.json,application/json" onChange={handleContractsFile}/></details>
 
