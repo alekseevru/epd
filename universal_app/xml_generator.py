@@ -109,6 +109,21 @@ def normalize_vehicle_number(value) -> str:
     return re.sub(r"[\s/]+", "", clean(value))
 
 
+def vehicle_rental_details(vehicle: dict) -> dict | None:
+    ownership = clean(vehicle.get("Тип владения"))
+    if "АРЕНД" not in ownership.upper().replace("Ё", "Е") and ownership != "3":
+        return None
+    note = clean(vehicle.get("Примечание"))
+    contract = re.search(r"(?:№|N)\s*([^\s,;]+)\s*от\s*(\d{1,2}\.\d{1,2}\.\d{4})", note, re.IGNORECASE)
+    landlord = re.search(r"\bИНН\s*[:№-]?\s*(\d{10}|\d{12})(?!\d)", note, re.IGNORECASE)
+    if not contract or not landlord:
+        raise ValueError("В карточке арендованного автомобиля укажите в «Примечании» номер и дату договора, а также ИНН арендодателя")
+    try:
+        contract_date = datetime.strptime(contract.group(2), "%d.%m.%Y").strftime("%d.%m.%Y")
+    except ValueError as error:
+        raise ValueError("В примечании арендованного автомобиля неверная дата договора") from error
+    return {"number": contract.group(1), "date": contract_date, "landlord_inn": landlord.group(1)}
+
 def known_party_phone(name: str) -> str:
     return KNOWN_PARTY_PHONES_BY_NAME.get(normalize_name(name), "")
 
@@ -607,6 +622,7 @@ class Generator:
             "driver_license_issue_date": _as_datetime(driver.get("Дата окончания доверенности"), None),
             "truck_number": normalize_vehicle_number(truck_number or truck.get("Государственный номер")),
             "truck_brand": clean(truck.get("Марка")) or "Тягач",
+            "truck_rental": vehicle_rental_details(truck),
             "trailer": normalize_vehicle_number(value(row, "Номер прицепа")),
             "weight": clean(value(row, "Вес брутто")) or "0",
             "seals": ", ".join(dict.fromkeys(filter(None, [clean(value(row, "Номер пломбы")), clean(value(row, "Номер пломбы 2"))]))),
@@ -731,6 +747,18 @@ class Generator:
         truck = info.find("СвТС/ТС")
         truck.set("РегНомер", ctx["truck_number"] or "НЕУКАЗАН")
         truck.find("ПарТС").set("Марка", ctx["truck_brand"])
+        rental = ctx.get("truck_rental")
+        for previous in truck.findall("ОснАрЛиз"):
+            truck.remove(previous)
+        if rental:
+            truck.set("ТипВлад", "3")
+            basis = ET.SubElement(truck, "ОснАрЛиз", {
+                "НаимДок": "Договор аренды",
+                "НомерДок": rental["number"],
+                "ДатаДок": rental["date"],
+            })
+            taxpayer = "ИННФЛ" if len(rental["landlord_inn"]) == 12 else "ИННЮЛ"
+            ET.SubElement(ET.SubElement(basis, "ИдРекСост"), taxpayer).text = rental["landlord_inn"]
         trailer = info.find("СвТС/Прицеп")
         trailer.set("РегНомер", ctx["trailer"] or "ОТСУТСТВУЕТ")
         planned_departure = ctx["planned_departure_datetime"]

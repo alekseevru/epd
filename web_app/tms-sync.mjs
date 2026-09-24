@@ -39,6 +39,11 @@ const vehicleFields = {
   LIST_TYPE_MODEL_AUTO_NAME:"Марка", LIST_TYPE_VAN_NAME:"Тип кузова", CHASSIS_NUMBER_AUTO:"Номер шасси",
   VIN_NUMBER_AUTO:"VIN номер", NOTE:"Примечание",
 };
+const vehicleOwnershipFieldCandidates = [
+  "OWNERSHIP_TYPE",
+  "LIST_TYPE_OWNERSHIP_NAME", "LIST_TYPE_PROPERTY_NAME", "LIST_TYPE_OWNER_AUTO_NAME",
+  "TYPE_OWNERSHIP_NAME", "OWNERSHIP_TYPE_NAME", "TYPE_OWNER_NAME", "Тип владения",
+];
 const driverFields = {
   ID:"Номер записи", FULL_NAME:"Полное имя", DRIVER_NAME:"Имя", SURNAME:"Фамилия", PATRONYMIC:"Отчество",
   LIST_COMPANY_NAME:"Автоперевозчик", PHONE1:"Телефон 1", PHONE2:"Телефон 2", DOC_DATE:"Дата выдачи паспорта",
@@ -161,13 +166,36 @@ function cookiesFrom(headers) {
   return values.map((value) => value.split(";", 1)[0]).filter(Boolean).join("; ");
 }
 
-async function login(loginName, password) {
+export class TmsCaptchaError extends Error {
+  constructor(image) {
+    super("TMS требует ввести код с картинки");
+    this.name = "TmsCaptchaError";
+    this.image = image;
+  }
+}
+
+export async function generateTmsCaptcha(loginName) {
+  const response = await fetchTmsTable(`${BASE}/api/captcha/generate`, {
+    method: "POST", body: new URLSearchParams({ login: loginName }),
+  });
+  const result = await response.json().catch(() => ({}));
+  const image = result?.result?.data?.captchaImage;
+  if (!response.ok || typeof image !== "string" || !image.startsWith("<svg")) {
+    throw new Error("Не удалось получить новую капчу TMS");
+  }
+  return image;
+}
+
+async function login(loginName, password, captcha = "") {
   const first = await fetch(`${BASE}/login`, { redirect: "manual" });
   let cookie = cookiesFrom(first.headers);
   const body = new URLSearchParams({ deviceType: "desktop", login: loginName, password });
+  if (captcha) body.set("captcha", captcha);
   const response = await fetch(`${BASE}/login`, { method: "POST", body, headers: { Cookie: cookie }, redirect: "manual" });
   cookie = [cookie, cookiesFrom(response.headers)].filter(Boolean).join("; ");
   const result = await response.json().catch(() => ({}));
+  if (typeof result?.data?.captchaImage === "string") throw new TmsCaptchaError(result.data.captchaImage);
+  if (result?.type === "error") throw new Error(result.code || "TMS не приняла данные входа");
   if (!cookie.includes("token=") || result?.result?.status === "error") throw new Error("TMS не приняла логин или пароль");
   const token = /(?:^|;\s*)token=([^;]+)/.exec(cookie)?.[1] || "";
   return { cookie, token };
@@ -294,6 +322,12 @@ async function getDriverRows(session,onProgress=()=>{}) {
   return getRows(session,"LIST_DRIVERS",{...driverFields,[fieldName]:"Дата окончания доверенности"},null,"",onProgress);
 }
 
+async function getVehicleRows(session,onProgress=()=>{}) {
+  const ownershipField = await firstSupportedField(session,"LIST_AUTO",vehicleOwnershipFieldCandidates);
+  const fields = ownershipField ? {...vehicleFields,[ownershipField]:"Тип владения"} : vehicleFields;
+  return getRows(session,"LIST_AUTO",fields,null,"",onProgress);
+}
+
 async function getCargoRows(session,filters,createdSince,onProgress){
   const fieldName=await firstSupportedField(session,"OPERATION_UNIT",cargoOrderFieldCandidates);
   const fields=fieldName?{...cargoFields,[fieldName]:"Номер заказа"}:{...cargoFields};
@@ -384,11 +418,11 @@ export async function refreshTmsContainers({login:loginName,password,cacheDir,co
   return {cargo:cargoRows.length,auto:autoRows.length};
 }
 
-export async function syncTms({ login: loginName, password, cacheDir, referenceDir, onStatus = () => {} }) {
+export async function syncTms({ login: loginName, password, captcha = "", cacheDir, referenceDir, onStatus = () => {} }) {
   onStatus("login","working","Входим в TMS…");
   let session;
-  try { session = await login(loginName, password); onStatus("login","saved","Вход выполнен"); }
-  catch(error) { onStatus("login","error","TMS недоступна или не приняла данные входа"); throw error; }
+  try { session = await login(loginName, password, captcha); onStatus("login","saved","Вход выполнен"); }
+  catch(error) { onStatus("login","error",error instanceof TmsCaptchaError ? "Введите код с картинки TMS" : "TMS недоступна или не приняла данные входа"); throw error; }
   const fourMonthsAgo = new Date();
   fourMonthsAgo.setMonth(fourMonthsAgo.getMonth() - 4);
   const createdSince = fourMonthsAgo.toISOString().slice(0, 10);
@@ -409,7 +443,7 @@ export async function syncTms({ login: loginName, password, cacheDir, referenceD
     onStatus(key,"working","Получаем данные…");
     try {
       const progress=(count,message,progressValue)=>onStatus(key,"working",message,{count,progress:progressValue});
-      const rows=key==="drivers"?await getDriverRows(session,progress):key==="points"?await getWarehouseRows(session,progress):key==="auto"?await getAutoRows(session,filter,minimumDate,progress):key==="cargo"?await getCargoRows(session,filter,minimumDate,progress):key==="contracts"?await getContractRows(session,progress):await getRows(session,table,fields,filter,minimumDate,progress);
+      const rows=key==="drivers"?await getDriverRows(session,progress):key==="vehicles"?await getVehicleRows(session,progress):key==="points"?await getWarehouseRows(session,progress):key==="auto"?await getAutoRows(session,filter,minimumDate,progress):key==="cargo"?await getCargoRows(session,filter,minimumDate,progress):key==="contracts"?await getContractRows(session,progress):await getRows(session,table,fields,filter,minimumDate,progress);
       if(!rows.length) throw new Error("реестр пуст");
       const target=path.join(targetDir,filename);
       const savedRows=(key==="cargo"||key==="auto")?mergeTransportCache(target,table,rows):rows;

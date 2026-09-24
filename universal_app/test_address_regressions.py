@@ -5,7 +5,7 @@ from pathlib import Path
 from address_xml import known_gar, complete_gar
 from data_sources import Catalogs
 from server_generator import Generator as ServerGenerator
-from xml_generator import Generator, TAGLEX, address_attributes, _set_address, _set_contract, cargo_packaging, known_point_phone, normalize_vehicle_number, party
+from xml_generator import Generator, TAGLEX, address_attributes, _set_address, _set_contract, cargo_packaging, known_point_phone, normalize_vehicle_number, party, vehicle_rental_details
 
 
 class AddressRegressions(unittest.TestCase):
@@ -45,6 +45,36 @@ class AddressRegressions(unittest.TestCase):
         _, content = generator.ezz(context)
         root = ET.fromstring(content)
         self.assertEqual(root.find(".//СвГО/Адрес/АдрФИАС").get("ИдНом"), expected_fias)
+
+    def test_rented_truck_contract_in_both_etrn_types(self):
+        catalogs = Catalogs()
+        catalogs.vehicles = [{
+            "Государственный номер": "В512ММ98",
+            "Тип владения": "Аренда",
+            "Примечание": "№бн от14.01.2026 ИНН 781133069839",
+            "Марка": "Тягач",
+        }]
+        generator = Generator(Path(__file__).parent / "resources", catalogs)
+        context = generator.context({
+            "_container": "MIOU4934154",
+            "Клиент": 'ООО "АГРЛ"',
+            "Исполнитель": 'ООО "ОЛЮС"',
+            "Номер автомашины": "В512ММ98",
+        }, date(2026, 8, 31), "Иванов Иван Иванович", None)
+        for empty in (False, True):
+            _, content = generator.etrn(context, empty=empty)
+            root = ET.fromstring(content)
+            truck = root.find(".//СвТС/ТС")
+            self.assertEqual(truck.get("ТипВлад"), "3")
+            basis = truck.find("ОснАрЛиз")
+            self.assertEqual((basis.get("НомерДок"), basis.get("ДатаДок")), ("бн", "14.01.2026"))
+            self.assertEqual(basis.findtext("ИдРекСост/ИННФЛ"), "781133069839")
+            self.assertEqual(root.find(".//СвТС/Прицеп").get("ТипВлад"), "1")
+
+    def test_rented_truck_requires_contract_and_landlord_inn(self):
+        with self.assertRaisesRegex(ValueError, "арендованного автомобиля"):
+            vehicle_rental_details({"Тип владения": "Аренда", "Примечание": "№бн от14.01.2026"})
+        self.assertIsNone(vehicle_rental_details({"Тип владения": "Собственность", "Примечание": ""}))
 
     def test_incomplete_gar_fallback(self):
         text = '173008, Новгородская обл, Великий Новгород г, Магистральная ул, дом № 11/13'
