@@ -93,6 +93,8 @@ export default function Workspace() {
   const [restoreProgress,setRestoreProgress]=useState({active:true,completed:0,total:3,label:"Проверяем сохранённые справочники на сервере…"});
   const [tmsLogin, setTmsLogin] = useState("");
   const [tmsPassword, setTmsPassword] = useState("");
+  const [tmsApiConfigured, setTmsApiConfigured] = useState<boolean | null>(null);
+  const [tmsUsePersonal, setTmsUsePersonal] = useState(false);
   const [tmsCaptcha, setTmsCaptcha] = useState("");
   const [tmsCaptchaImage, setTmsCaptchaImage] = useState("");
   const [tmsCaptchaBusy, setTmsCaptchaBusy] = useState(false);
@@ -144,14 +146,16 @@ export default function Workspace() {
         setRestoreProgress({active:true,completed:0,total:3,label:"Проверяем сохранённые справочники на сервере…"});
         const statusResponse=await fetch("/api/tms-status");
         if(!statusResponse.ok) throw new Error("Статус TMS недоступен");
-        const status=await statusResponse.json() as {sources?:Record<string,{available:boolean;updatedAt:string,size?:number}|null>};
+        const status=await statusResponse.json() as {configured:boolean;sources?:Record<string,{available:boolean;updatedAt:string,size?:number}|null>};
+        setTmsApiConfigured(status.configured);
+        if(!status.configured)setTmsUsePersonal(true);
         if(status.sources?.edo?.available)setEdoSource({name:"Контрагенты Диадок",count:0,origin:"Сохранён на сервере",updatedAt:status.sources.edo.updatedAt});
         const metadata=(kind:"cargo"|"auto"|"points",name:string)=>{const info=status.sources?.[kind];return info?.available?{name,count:0,origin:"Сохранён на сервере",updatedAt:info.updatedAt}:null;};
         const cargo=metadata("cargo","TMS · Грузы текущие"),auto=metadata("auto","TMS · ТТН / CMR"),routePoints=metadata("points","TMS · Точки маршрута");
         setCargoSource(cargo);setAutoSource(auto);setPointsSource(routePoints);
         setMessage(cargo&&auto?"Используются сохранённые на сервере данные TMS. Введите контейнеры для поиска.":"Сохранённых реестров пока нет. Обновите данные из TMS.");
         setRestoreProgress({active:false,completed:3,total:3,label:cargo&&auto?"Данные TMS готовы":"Сохранённые справочники не найдены"});
-      } catch { setMessage("Сохранённых реестров пока нет. Обновите данные из TMS.");setRestoreProgress(current=>({...current,active:false,label:"Сохранённые справочники не найдены"})); }
+      } catch { setTmsApiConfigured(false);setTmsUsePersonal(true);setMessage("Сохранённых реестров пока нет. Обновите данные из TMS.");setRestoreProgress(current=>({...current,active:false,label:"Сохранённые справочники не найдены"})); }
     })();
   }, []);
 
@@ -211,22 +215,24 @@ export default function Workspace() {
   };
 
   const updateFromTms = async () => {
-    if(!tmsLogin.trim()||!tmsPassword){
+    const usePersonal=tmsUsePersonal;
+    if(usePersonal&&(!tmsLogin.trim()||!tmsPassword)){
       setMessage("Введите свой логин и пароль TMS перед обновлением.");
       document.getElementById("tms-credentials")?.setAttribute("open","");
       document.getElementById(tmsLogin.trim()?"tms-password":"tms-login")?.focus();
       return;
     }
-    if(tmsCaptchaImage&&!tmsCaptcha.trim()){setMessage("Введите код с картинки TMS.");document.getElementById("tms-captcha")?.focus();return;}
+    if(usePersonal&&tmsCaptchaImage&&!tmsCaptcha.trim()){setMessage("Введите код с картинки TMS.");document.getElementById("tms-captcha")?.focus();return;}
     const stageKeys=["login","cargo","auto","companies","vehicles","drivers","points","contracts","apply"];
     const initial:Record<string,{state:"queued";message:string}>={}; stageKeys.forEach(key=>initial[key]={state:"queued",message:"Ожидает"});
-    setTmsStatuses(initial); setTmsModalOpen(true); setTmsBusy(true); setMessage("Обновляем данные из TMS…");
+    setTmsStatuses(initial); setTmsModalOpen(true); setTmsBusy(true); setMessage(usePersonal?"Обновляем данные под вашей учётной записью TMS…":"Обновляем данные через API TMS…");
     let captchaRequired=false;
     try {
-      const response=await fetch("/api/tms-update",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({login:tmsLogin.trim(),password:tmsPassword,captcha:tmsCaptcha.trim()})});
+      const credentials=usePersonal?{mode:"personal",login:tmsLogin.trim(),password:tmsPassword,captcha:tmsCaptcha.trim()}:{mode:"api"};
+      const response=await fetch("/api/tms-update",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(credentials)});
       if(!response.ok||!response.body) throw new Error("Не удалось запустить обновление TMS");
       const reader=response.body.getReader(); const decoder=new TextDecoder(); let buffer=""; let completeResult:Record<string,number>|null=null;
-      const processLine=(line:string)=>{if(!line.trim())return;const event=JSON.parse(line);if(event.type==="status")setTmsStatuses(current=>({...current,[event.key]:{state:event.state,message:event.message,count:event.count,progress:event.progress}}));if(event.type==="fatal"){if(event.captchaImage){captchaRequired=true;setTmsCaptchaImage(event.captchaImage);setTmsCaptcha("");setTmsModalOpen(false);window.setTimeout(()=>document.getElementById("tms-captcha")?.focus(),0);}throw new Error(event.error);}if(event.type==="complete")completeResult=event.result;};
+      const processLine=(line:string)=>{if(!line.trim())return;const event=JSON.parse(line);if(event.type==="status")setTmsStatuses(current=>({...current,[event.key]:{state:event.state,message:event.message,count:event.count,progress:event.progress}}));if(event.type==="fatal"){if(usePersonal&&event.captchaImage){captchaRequired=true;setTmsCaptchaImage(event.captchaImage);setTmsCaptcha("");setTmsModalOpen(false);window.setTimeout(()=>document.getElementById("tms-captcha")?.focus(),0);}throw new Error(event.error);}if(event.type==="complete")completeResult=event.result;};
       while(true){const {done,value}=await reader.read();buffer+=decoder.decode(value||new Uint8Array(),{stream:!done});const lines=buffer.split(/\r?\n/);buffer=lines.pop()||"";for(const line of lines)processLine(line);if(done)break;} if(buffer)processLine(buffer);
       if(!completeResult) throw new Error("TMS не подтвердила завершение обновления");
       const statusResponse=await fetch("/api/tms-status",{cache:"no-store"});if(!statusResponse.ok)throw new Error("Данные обновлены, но их статус недоступен");
@@ -235,7 +241,7 @@ export default function Workspace() {
       setCargoSource(source("cargo","TMS · Грузы текущие"));setAutoSource(source("auto","TMS · ТТН / CMR"));setPointsSource(source("points","TMS · Точки маршрута"));setResults([]);
       setTmsCaptchaImage("");setTmsCaptcha("");
       setMessage("Данные и справочники TMS успешно обновлены");
-    } catch(error) { const message=error instanceof Error?error.message:"Ошибка обновления TMS";setMessage(message);setTmsStatuses(current=>({...current,apply:{state:"error",message}})); }
+    } catch(error) { const reason=error instanceof Error?error.message:"Ошибка обновления TMS";const message=usePersonal?reason:`${reason} Если обновление через API не удалось, введите свой логин и пароль TMS.`;if(!usePersonal){setTmsUsePersonal(true);setTmsModalOpen(false);}setMessage(message);setTmsStatuses(current=>({...current,apply:{state:"error",message}})); }
     finally { setTmsBusy(false); if(!captchaRequired)setTmsPassword(""); }
   };
 
@@ -432,14 +438,14 @@ export default function Workspace() {
         {!kontur.connected?<button disabled={!kontur.configured} onClick={()=>{window.location.href="/api/kontur/login";}}>{kontur.configured?"Войти через Контур":"Нет настроек API"}</button>:<div><span className={styles.konturActions}><button disabled={edoBusy} onClick={syncEdoFromKontur}>{edoBusy?`Обновляем · ${edoProgress}%`:"Обновить контрагентов"}</button><button className={styles.secondaryButton} onClick={()=>{window.location.href="/api/kontur/login";}}>Переподключить</button></span><small>{edoSource?.updatedAt?`Контрагенты обновлены ${new Date(edoSource.updatedAt).toLocaleString("ru-RU")}`:"Контрагенты ещё не обновлялись"}</small>{edoBusy&&<progress value={edoProgress} max={100}/>}</div>}
       </section>
       <section className={styles.tmsPanel}>
-        <div className={styles.tmsBar}><div><strong>Данные TMS</strong><small>{updatedLabel(tmsUpdatedAt)}</small><small>Грузы, ТТН/CMR и точки маршрута</small></div><button disabled={tmsBusy || busy} onClick={updateFromTms}>{tmsBusy ? "Обновляем…" : ready ? "Обновить данные" : "Загрузить данные из TMS"}</button></div>
+        <div className={styles.tmsBar}><div><strong>Данные TMS</strong><small>{updatedLabel(tmsUpdatedAt)}</small><small>{tmsUsePersonal?"Запасной вход: ваша учётная запись TMS":"По умолчанию: обновление через API TMS"} · Грузы, ТТН/CMR и точки маршрута</small></div><button disabled={tmsBusy || busy || tmsApiConfigured===null} onClick={updateFromTms}>{tmsBusy ? "Обновляем…" : ready ? "Обновить данные" : "Загрузить данные из TMS"}</button></div>
         {restoreProgress.active&&<div className={styles.restoreProgress}><div><strong>{restoreProgress.label}</strong><small>{restoreProgress.completed} из {restoreProgress.total} справочников</small></div><progress value={restoreProgress.completed} max={restoreProgress.total}/></div>}
         <div className={styles.tmsSources}>
           {[{title:"Грузы → Текущие",source:cargoSource},{title:"ТТН / CMR",source:autoSource},{title:"Точки маршрута",source:pointsSource}].map(({title,source})=>
             <article key={title} className={source?styles.sourceReady:styles.sourceMissing}><b>{source?"✓":"—"}</b><span><strong>{title}</strong><small>{source?`${source.count.toLocaleString("ru-RU")} строк · ${source.origin}`:"Нет сохранённых данных"}</small>{source?.updatedAt&&<em>Обновлено {new Date(source.updatedAt).toLocaleString("ru-RU")}</em>}</span></article>
           )}
         </div>
-        <details id="tms-credentials" className={styles.tmsCredentials} open><summary>Вход в TMS под своей учётной записью</summary><p>Для обновления введите свой логин и пароль TMS. Если TMS запросит капчу, введите код с картинки и повторите обновление.</p><div><label><span>Ваш логин TMS</span><input id="tms-login" autoComplete="username" value={tmsLogin} onChange={event=>{setTmsLogin(event.target.value);setTmsCaptchaImage("");setTmsCaptcha("");}} placeholder="Ваш логин TMS" disabled={tmsBusy}/></label><label><span>Ваш пароль TMS</span><input id="tms-password" type="password" autoComplete="current-password" value={tmsPassword} onChange={event=>setTmsPassword(event.target.value)} placeholder="Ваш пароль TMS" disabled={tmsBusy}/></label></div>{tmsCaptchaImage&&<div className={styles.tmsCaptcha}><img src={tmsCaptchaImage} alt="Код с картинки TMS" width="150" height="50"/><label><span>Код с картинки</span><input id="tms-captcha" value={tmsCaptcha} onChange={event=>setTmsCaptcha(event.target.value)} autoComplete="off" disabled={tmsBusy}/></label><button type="button" onClick={refreshTmsCaptcha} disabled={tmsBusy||tmsCaptchaBusy}>{tmsCaptchaBusy?"Обновляем…":"Другая картинка"}</button></div>}</details>
+        {tmsUsePersonal?<details id="tms-credentials" className={styles.tmsCredentials} open><summary>Запасной вход под своей учётной записью</summary><p>{tmsApiConfigured?"Вводите личный логин и пароль, только если обновление через API не получилось.":"На сервере не настроен вход через API. Введите свой логин и пароль TMS."} Если TMS запросит капчу, введите код с картинки и повторите обновление.</p><div><label><span>Ваш логин TMS</span><input id="tms-login" autoComplete="username" value={tmsLogin} onChange={event=>{setTmsLogin(event.target.value);setTmsCaptchaImage("");setTmsCaptcha("");}} placeholder="Ваш логин TMS" disabled={tmsBusy}/></label><label><span>Ваш пароль TMS</span><input id="tms-password" type="password" autoComplete="current-password" value={tmsPassword} onChange={event=>setTmsPassword(event.target.value)} placeholder="Ваш пароль TMS" disabled={tmsBusy}/></label></div>{tmsCaptchaImage&&<div className={styles.tmsCaptcha}><img src={tmsCaptchaImage} alt="Код с картинки TMS" width="150" height="50"/><label><span>Код с картинки</span><input id="tms-captcha" value={tmsCaptcha} onChange={event=>setTmsCaptcha(event.target.value)} autoComplete="off" disabled={tmsBusy}/></label><button type="button" onClick={refreshTmsCaptcha} disabled={tmsBusy||tmsCaptchaBusy}>{tmsCaptchaBusy?"Обновляем…":"Другая картинка"}</button></div>}{tmsApiConfigured&&<button type="button" className={styles.tmsApiRetry} onClick={()=>{setTmsUsePersonal(false);setTmsPassword("");setTmsCaptchaImage("");setTmsCaptcha("");}} disabled={tmsBusy}>Снова попробовать через API</button>}</details>:<p className={styles.tmsApiHint}>Обычно логин и пароль вводить не нужно. Используйте личный вход, только если обновление через API не удалось.</p>}
       </section>
         <details className={styles.manualPanel}><summary>Ручная загрузка и восстановление</summary><p>Используйте этот раздел, только если TMS или API Диадока временно недоступны.</p><div><button onClick={() => cargoRef.current?.click()}><strong>Реестр грузов</strong><small>{cargoSource?.name ?? "Выбрать OPERATION_UNIT"}</small></button><button onClick={() => autoRef.current?.click()}><strong>ТТН / CMR</strong><small>{autoSource?.name ?? "Выбрать OPERATION_SUB_DOC"}</small></button><button onClick={() => pointsRef.current?.click()}><strong>Точки маршрута</strong><small>{pointsSource?.name ?? "Выбрать LIST_WAREHOUSE"}</small></button><button onClick={()=>edoRef.current?.click()}><strong>Контрагенты ЭДО</strong><small>{edoSource?.count?`${edoSource.count.toLocaleString("ru-RU")} строк`:edoSource?.name??"Загрузить counteragents.csv"}</small></button><button onClick={()=>contractsRef.current?.click()}><strong>Договоры</strong><small>Загрузить LIST_CONTRACTS.xlsx или contracts.json</small></button><button className={styles.resetButton} onClick={resetSources}>Сбросить локальную базу</button></div><input ref={cargoRef} hidden type="file" accept=".xlsx,.xls" onChange={handleFile("cargo")}/><input ref={autoRef} hidden type="file" accept=".xlsx,.xls" onChange={handleFile("auto")}/><input ref={pointsRef} hidden type="file" accept=".xlsx,.xls" onChange={handleFile("points")}/><input ref={edoRef} hidden type="file" accept=".csv,text/csv" onChange={handleEdoFile}/><input ref={contractsRef} hidden type="file" accept=".xlsx,.xls,.json,application/json" onChange={handleContractsFile}/></details>
 
