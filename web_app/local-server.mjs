@@ -7,6 +7,7 @@ import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import * as XLSX from "xlsx";
 import { syncTms, contractRowsToCatalog, generateTmsCaptcha, TmsCaptchaError } from "./tms-sync.mjs";
+import { isTmsApiConfigured, resolveTmsCredentials } from "./tms-credentials.mjs";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const appPackage = JSON.parse(fs.readFileSync(path.join(root,"package.json"),"utf8"));
@@ -507,9 +508,9 @@ const server = http.createServer((request, response) => {
     response.end(JSON.stringify({version:appPackage.version,build:appBuild}));return;
   }
   if (request.method === "GET" && url.pathname === "/api/tms-status") {
-    const configured=false; // No shared TMS login.
+    const configured=isTmsApiConfigured();
     response.writeHead(200,{"Content-Type":"application/json; charset=utf-8"});
-    response.end(JSON.stringify({configured,requiresCredentials:true,sources:sourceStatus()})); return;
+    response.end(JSON.stringify({configured,requiresCredentials:!configured,sources:sourceStatus()})); return;
   }
   if (request.method === "POST" && url.pathname === "/api/trips/search") {
     let body="";request.setEncoding("utf8");request.on("data",chunk=>body+=chunk);request.on("end",()=>void(async()=>{try{
@@ -548,8 +549,7 @@ const server = http.createServer((request, response) => {
       const send=(payload)=>response.write(JSON.stringify(payload)+"\n");
       try {
         const supplied=body?JSON.parse(body):{};
-        const credentials={login:typeof supplied.login==="string"?supplied.login.trim():"",password:typeof supplied.password==="string"?supplied.password:"",captcha:typeof supplied.captcha==="string"?supplied.captcha.trim():""};
-        if(!credentials.login||!credentials.password) throw new Error("Укажите свой логин и пароль TMS");
+        const credentials=resolveTmsCredentials(supplied);
         fs.mkdirSync(referenceRoot,{recursive:true});
         const result=await syncTms({...credentials,cacheDir:cacheRoot,referenceDir:referenceRoot,onStatus:(key,state,message,details={})=>send({type:"status",key,state,message,...details})});
         send({type:"status",key:"apply",state:"working",message:"Перезагружаем справочники…"}); restartGeneratorWorker();
