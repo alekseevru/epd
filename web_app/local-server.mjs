@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import * as XLSX from "xlsx";
-import { syncTms, contractRowsToCatalog } from "./tms-sync.mjs";
+import { syncTms, contractRowsToCatalog, generateTmsCaptcha, TmsCaptchaError } from "./tms-sync.mjs";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const appPackage = JSON.parse(fs.readFileSync(path.join(root,"package.json"),"utf8"));
@@ -17,6 +17,10 @@ const clientRoot = path.join(root, "dist", "client");
 const vinextCli = path.join(root, "node_modules", "vinext", "dist", "cli.js");
 const appPort = 3001;
 const publicPort = Number(process.env.PORT || 3000);
+const captchaDataUrl = image => {
+  if(typeof image!=="string"||image.length>200_000||!/^<svg\b/i.test(image))throw new Error("TMS вернула неверное изображение капчи");
+  return "data:image/svg+xml;base64,"+Buffer.from(image,"utf8").toString("base64");
+};
 const cacheRoot = path.join(root,"work","source-cache");
 const konturTokenFile = path.join(root,"work","kontur-tokens.json");
 const referenceRoot = process.env.AGR_REFERENCES_DIR || path.join(root,"..","data","references");
@@ -527,19 +531,30 @@ const server = http.createServer((request, response) => {
     if(!file||!fs.existsSync(file)){response.writeHead(404);response.end();return;}
     const isCsv=kind==="edo";response.writeHead(200,{"Content-Type":isCsv?"text/csv; charset=utf-8":"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet","Content-Disposition":`attachment; filename="${kind}.${isCsv?"csv":"xlsx"}"`}); fs.createReadStream(file).pipe(response); return;
   }
+  if (request.method === "POST" && url.pathname === "/api/tms-captcha") {
+    let body=""; request.setEncoding("utf8"); request.on("data",chunk=>body+=chunk); request.on("end",async()=>{
+      try {
+        const login=String(JSON.parse(body||"{}").login||"").trim();
+        if(!login)throw new Error("Укажите логин TMS");
+        const image=await generateTmsCaptcha(login);
+        response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});
+        response.end(JSON.stringify({image:captchaDataUrl(image)}));
+      }catch(error){response.writeHead(400,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify({error:error.message||"Не удалось получить капчу TMS"}));}
+    }); return;
+  }
   if (request.method === "POST" && url.pathname === "/api/tms-update") {
     let body=""; request.setEncoding("utf8"); request.on("data",chunk=>body+=chunk); request.on("end",async()=>{
       response.writeHead(200,{"Content-Type":"application/x-ndjson; charset=utf-8","Cache-Control":"no-cache"});
       const send=(payload)=>response.write(JSON.stringify(payload)+"\n");
       try {
         const supplied=body?JSON.parse(body):{};
-        const credentials={login:typeof supplied.login==="string"?supplied.login.trim():"",password:typeof supplied.password==="string"?supplied.password:""};
+        const credentials={login:typeof supplied.login==="string"?supplied.login.trim():"",password:typeof supplied.password==="string"?supplied.password:"",captcha:typeof supplied.captcha==="string"?supplied.captcha.trim():""};
         if(!credentials.login||!credentials.password) throw new Error("Укажите свой логин и пароль TMS");
         fs.mkdirSync(referenceRoot,{recursive:true});
         const result=await syncTms({...credentials,cacheDir:cacheRoot,referenceDir:referenceRoot,onStatus:(key,state,message,details={})=>send({type:"status",key,state,message,...details})});
         send({type:"status",key:"apply",state:"working",message:"Перезагружаем справочники…"}); restartGeneratorWorker();
         send({type:"status",key:"apply",state:"saved",message:"Справочники применены"}); send({type:"complete",result}); response.end();
-      } catch(error){send({type:"fatal",error:error.message||"Не удалось обновить данные из TMS"});response.end();}
+      } catch(error){send({type:"fatal",error:error.message||"Не удалось обновить данные из TMS",...(error instanceof TmsCaptchaError?{captchaImage:captchaDataUrl(error.image)}:{})});response.end();}
     }); return;
   }
   if (request.method === "POST" && url.pathname === "/api/cache-source") {
