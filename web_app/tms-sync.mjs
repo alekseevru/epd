@@ -169,6 +169,13 @@ export class TmsCaptchaError extends Error {
   }
 }
 
+export class TmsSessionConflictError extends Error {
+  constructor() {
+    super("Этот логин уже используется в TMS в другой сессии. Выйдите из TMS в браузере или на другом устройстве и повторите обновление.");
+    this.name = "TmsSessionConflictError";
+  }
+}
+
 export async function generateTmsCaptcha(loginName) {
   const response = await fetchTmsTable(`${BASE}/api/captcha/generate`, {
     method: "POST", body: new URLSearchParams({ login: loginName }),
@@ -190,6 +197,7 @@ async function login(loginName, password, captcha = "") {
   cookie = [cookie, cookiesFrom(response.headers)].filter(Boolean).join("; ");
   const result = await response.json().catch(() => ({}));
   if (typeof result?.data?.captchaImage === "string") throw new TmsCaptchaError(result.data.captchaImage);
+  if (result?.type === "error" && result.code === "exists_another_devices") throw new TmsSessionConflictError();
   if (result?.type === "error") throw new Error(result.code || "TMS не приняла данные входа");
   if (!cookie.includes("token=") || result?.result?.status === "error") throw new Error("TMS не приняла логин или пароль");
   const token = /(?:^|;\s*)token=([^;]+)/.exec(cookie)?.[1] || "";
@@ -411,7 +419,7 @@ export async function syncTms({ login: loginName, password, captcha = "", cacheD
   onStatus("login","working","Входим в TMS…");
   let session;
   try { session = await login(loginName, password, captcha); onStatus("login","saved","Вход выполнен"); }
-  catch(error) { onStatus("login","error",error instanceof TmsCaptchaError ? "Введите код с картинки TMS" : "TMS недоступна или не приняла данные входа"); throw error; }
+  catch(error) { onStatus("login","error",error instanceof TmsCaptchaError ? "Введите код с картинки TMS" : error instanceof TmsSessionConflictError ? error.message : "TMS недоступна или не приняла данные входа"); throw error; }
   const fourMonthsAgo = new Date();
   fourMonthsAgo.setMonth(fourMonthsAgo.getMonth() - 4);
   const createdSince = fourMonthsAgo.toISOString().slice(0, 10);
