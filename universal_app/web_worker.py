@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 from data_sources import Catalogs, clean, normalize_name, read_counteragents, read_xlsx, value
 from server_generator import Generator
+from manual_corrections import prepare_manual_fields
 
 
 def load_catalogs():
@@ -220,18 +221,19 @@ def handle(request):
     if request.get("action") == "forwarding_userdata":
         return {"userDataXml":generator.forwarding_order_userdata(ctx, clean(request.get("signer")))}
     ctx["gar_addresses"] = request.get("garAddresses") or {}
+    kind = request["kind"]
+    editable_fields, applied_corrections = prepare_manual_fields(ctx, kind, request.get("savedCorrections"), request.get("manualValues"))
     for role, participant_id in (request.get("edoOverrides") or {}).items():
         if role in {"client", "consignee", "carrier"} and clean(participant_id):
             ctx[f"{role}_edo"] = clean(participant_id)
-    kind = request["kind"]
     warnings = generator.warnings(ctx, empty=kind == "empty", ezz=kind == "order")
     if warnings and not request.get("confirmWarnings"):
-        return {"requiresConfirmation": True, "warnings": warnings}
+        return {"requiresConfirmation": True, "warnings": warnings, "editableFields": editable_fields}
     if kind == "cargo": filename, content = generator.etrn(ctx, False)
     elif kind == "empty": filename, content = generator.etrn(ctx, True)
     elif kind == "order": filename, content = generator.ezz(ctx)
     else: raise ValueError("Неизвестный тип документа")
-    return {"filename":filename,"content":base64.b64encode(content).decode("ascii")}
+    return {"filename":filename,"content":base64.b64encode(content).decode("ascii"),"appliedCorrections":applied_corrections}
 
 
 try:

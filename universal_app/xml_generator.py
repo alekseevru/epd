@@ -122,13 +122,18 @@ def vehicle_ownership_details(vehicle: dict) -> dict | None:
     note = clean(vehicle.get("Примечание"))
     contract = re.search(r"(?:№|N)\s*([^\s,;]+)\s*от\s*(\d{1,2}\.\d{1,2}\.\d{4})", note, re.IGNORECASE)
     owner = re.search(r"\bИНН\s*[:№-]?\s*(\d{10}|\d{12})(?!\d)", note, re.IGNORECASE)
-    if not contract or not owner:
-        return details
-    try:
-        contract_date = datetime.strptime(contract.group(2), "%d.%m.%Y").strftime("%d.%m.%Y")
-    except ValueError:
-        return details
-    return {**details, "number": contract.group(1), "date": contract_date, "owner_inn": owner.group(1)}
+    if contract:
+        details["number"] = contract.group(1)
+        try:
+            details["date"] = datetime.strptime(contract.group(2), "%d.%m.%Y").strftime("%d.%m.%Y")
+        except ValueError:
+            pass
+    if owner:
+        details["owner_inn"] = owner.group(1)
+    for field, key in (("number", "_manual_contract_number"), ("date", "_manual_contract_date"), ("owner_inn", "_manual_owner_inn")):
+        if not details.get(field) and clean(vehicle.get(key)):
+            details[field] = clean(vehicle[key])
+    return details
 
 
 def known_party_phone(name: str) -> str:

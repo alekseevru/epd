@@ -25,6 +25,23 @@ const captchaDataUrl = image => {
 const cacheRoot = path.join(root,"work","source-cache");
 const konturTokenFile = path.join(root,"work","kontur-tokens.json");
 const referenceRoot = process.env.AGR_REFERENCES_DIR || path.join(root,"..","data","references");
+const manualCorrectionsFile = path.join(referenceRoot,"manual-document-corrections.json");
+const manualCorrectionKeys = new Set(["contract_number","contract_date","owner_inn","phone","driver_name","driver_phone","driver_license","loading","delivery","name","inn"]);
+const loadManualCorrections=()=>{try{const data=JSON.parse(fs.readFileSync(manualCorrectionsFile,"utf8"));return data&&typeof data==="object"&&!Array.isArray(data)?data:{};}catch{return {};}};
+const saveManualCorrections=(entries)=>{
+  if(!Array.isArray(entries)||!entries.length)return;
+  const data=loadManualCorrections();
+  for(const entry of entries){
+    const scope=String(entry.scope||"").trim(),key=String(entry.key||"").trim(),value=String(entry.value||"").trim();
+    if(!/^(?:vehicle|party|driver|container):[^\r\n]{1,150}$/.test(scope)||!manualCorrectionKeys.has(key)||!value||value.length>1000)continue;
+    if(!Object.hasOwn(data,scope))data[scope]={};
+    data[scope][key]=value;
+  }
+  fs.mkdirSync(referenceRoot,{recursive:true});
+  const temporary=`${manualCorrectionsFile}.${randomBytes(6).toString("hex")}.tmp`;
+  fs.writeFileSync(temporary,JSON.stringify(data,null,2)+"\n",{encoding:"utf8",mode:0o600});
+  fs.renameSync(temporary,manualCorrectionsFile);
+};
 const konturIdentityUrl = "https://identity.kontur.ru";
 const diadocApiUrl = process.env.KONTUR_DIADOC_API_URL || "https://diadoc-api.kontur.ru";
 const konturScopes = process.env.KONTUR_SCOPES || "openid profile email offline_access kl.public.api kl.transportations.orders.public.api Diadoc.PublicAPI";
@@ -600,6 +617,7 @@ const server = http.createServer((request, response) => {
     let body=""; request.setEncoding("utf8"); request.on("data",chunk=>{body+=chunk;}); request.on("end",()=>{void(async()=>{
       try {
         const payload=JSON.parse(body);
+        payload.savedCorrections=loadManualCorrections();
         const edoOptions=await sendGeneratorRequest({...payload,action:"edo_options"});
         if(edoOptions.error)throw new Error(edoOptions.error);
         let evidence=new Map();try{evidence=await loadSignedEdoEvidence(edoOptions.parties);}catch{}
@@ -619,6 +637,7 @@ const server = http.createServer((request, response) => {
           }
         }
         const result=await sendGeneratorRequest(payload);
+        if(!result.error&&result.content&&payload.saveManualValues===true)saveManualCorrections(result.appliedCorrections);
         response.writeHead(result.error?400:200,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify(result));
       } catch(error){response.writeHead(400,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({error:error.message||"Некорректный запрос"}));}
     })();}); return;
