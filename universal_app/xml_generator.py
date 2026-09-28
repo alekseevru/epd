@@ -118,17 +118,17 @@ def vehicle_ownership_details(vehicle: dict) -> dict | None:
     else:
         return None
 
+    details = {"ownership_code": ownership_code, "contract_title": contract_title}
     note = clean(vehicle.get("Примечание"))
     contract = re.search(r"(?:№|N)\s*([^\s,;]+)\s*от\s*(\d{1,2}\.\d{1,2}\.\d{4})", note, re.IGNORECASE)
     owner = re.search(r"\bИНН\s*[:№-]?\s*(\d{10}|\d{12})(?!\d)", note, re.IGNORECASE)
     if not contract or not owner:
-        raise ValueError(f"Для ТС с типом владения «{vehicle.get('Тип владения')}» в примечании нужны номер и дата договора, а также ИНН арендодателя/лизингодателя")
+        return details
     try:
         contract_date = datetime.strptime(contract.group(2), "%d.%m.%Y").strftime("%d.%m.%Y")
-    except ValueError as error:
-        raise ValueError("В примечании автомобиля неверная дата договора аренды/лизинга") from error
-    return {"ownership_code": ownership_code, "contract_title": contract_title,
-            "number": contract.group(1), "date": contract_date, "owner_inn": owner.group(1)}
+    except ValueError:
+        return details
+    return {**details, "number": contract.group(1), "date": contract_date, "owner_inn": owner.group(1)}
 
 
 def known_party_phone(name: str) -> str:
@@ -759,13 +759,14 @@ class Generator:
         ownership = vehicle_ownership_details(ctx.get("truck_vehicle") or {})
         if ownership:
             truck.set("ТипВлад", ownership["ownership_code"])
-            basis = ET.SubElement(truck, "ОснАрЛиз", {
-                "НаимДок": ownership["contract_title"],
-                "НомерДок": ownership["number"],
-                "ДатаДок": ownership["date"],
-            })
-            taxpayer = "ИННФЛ" if len(ownership["owner_inn"]) == 12 else "ИННЮЛ"
-            ET.SubElement(ET.SubElement(basis, "ИдРекСост"), taxpayer).text = ownership["owner_inn"]
+            if ownership.get("number") and ownership.get("date") and ownership.get("owner_inn"):
+                basis = ET.SubElement(truck, "ОснАрЛиз", {
+                    "НаимДок": ownership["contract_title"],
+                    "НомерДок": ownership["number"],
+                    "ДатаДок": ownership["date"],
+                })
+                taxpayer = "ИННФЛ" if len(ownership["owner_inn"]) == 12 else "ИННЮЛ"
+                ET.SubElement(ET.SubElement(basis, "ИдРекСост"), taxpayer).text = ownership["owner_inn"]
         trailer = info.find("СвТС/Прицеп")
         trailer.set("РегНомер", ctx["trailer"] or "ОТСУТСТВУЕТ")
         planned_departure = ctx["planned_departure_datetime"]

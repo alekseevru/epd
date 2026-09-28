@@ -3,7 +3,7 @@ import re
 import uuid
 import xml.etree.ElementTree as ET
 
-from xml_generator import Generator as BaseGenerator, TAGLEX, address_attributes
+from xml_generator import Generator as BaseGenerator, TAGLEX, address_attributes, vehicle_ownership_details
 
 
 class Generator(BaseGenerator):
@@ -47,6 +47,9 @@ class Generator(BaseGenerator):
         if ezz and (not ctx.get("loading_owner", {}).get("inn") or not ctx.get("loading_owner", {}).get("name")):
             warnings.append("В справочнике не заполнены название или ИНН владельца точки погрузки. Заполните сведения о владельце вручную в заявке перед подписанием.")
         if not ezz:
+            ownership = vehicle_ownership_details(ctx.get("truck_vehicle") or {})
+            if ownership and not all(ownership.get(field) for field in ("number", "date", "owner_inn")):
+                warnings.append("Для автомобиля указана аренда или лизинг, но в примечании нет полного набора реквизитов договора (номер, дата и ИНН владельца). Тип владения сохранён; заполните договор вручную в черновике ЭТрН перед подписанием.")
             if not ctx.get("client", {}).get("phone"):
                 warnings.append("В справочнике организаций не заполнен телефон заказчика.")
             if not empty and not ctx.get("consignee", {}).get("phone"):
