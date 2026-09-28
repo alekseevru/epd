@@ -90,10 +90,25 @@ class AddressRegressions(unittest.TestCase):
             self.assertEqual(truck.find("ОснАрЛиз").get("НаимДок"), "Договор лизинга")
             self.assertEqual(truck.findtext("ОснАрЛиз/ИдРекСост/ИННЮЛ"), "7701234567")
 
-    def test_vehicle_contract_details_are_required_for_rental_and_lease(self):
-        for ownership in ("Аренда", "Лизинг"):
-            with self.subTest(ownership=ownership), self.assertRaisesRegex(ValueError, "ИНН"):
-                vehicle_ownership_details({"Тип владения": ownership, "Примечание": "№бн от14.01.2026"})
+    def test_vehicle_contract_can_be_completed_in_draft(self):
+        for ownership, code in (("Аренда", "3"), ("Лизинг", "4")):
+            for note in ("", "№бн от14.01.2026", "№бн от31.02.2026 ИНН 781133069839"):
+                with self.subTest(ownership=ownership, note=note):
+                    catalogs = Catalogs()
+                    catalogs.vehicles = [{"Государственный номер": "В512ММ98", "Марка": "Скания",
+                                          "Тип владения": ownership, "Примечание": note}]
+                    generator = Generator(Path(__file__).parent / "resources", catalogs)
+                    context = generator.context({"_container": "MIOU4934154", "Номер автомашины": "В512ММ98"},
+                                                date(2026, 8, 31), "Иванов Иван Иванович", None)
+                    for empty in (False, True):
+                        _, content = generator.etrn(context, empty=empty)
+                        truck = ET.fromstring(content).find(".//СвТС/ТС")
+                        self.assertEqual(truck.get("ТипВлад"), code)
+                        self.assertIsNone(truck.find("ОснАрЛиз"))
+                        self.assertTrue(any("заполните договор вручную" in warning
+                                            for warning in ServerGenerator.warnings(context, empty=empty)))
+                    self.assertFalse(any("заполните договор вручную" in warning
+                                         for warning in ServerGenerator.warnings(context, ezz=True)))
         self.assertIsNone(vehicle_ownership_details({"Тип владения": "Собственность", "Примечание": ""}))
 
     def test_incomplete_gar_fallback(self):
