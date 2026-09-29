@@ -124,6 +124,9 @@ class Catalogs:
             exact = [r for r in candidates if clean(r.get("ИНН")) == inn and (not kpp or clean(r.get("КПП")) == kpp)]
             if exact:
                 return exact[0]
+            # An explicitly supplied INN must never resolve to a namesake with
+            # another tax identity.
+            return None
         key = normalize_name(name)
         exact = [
             row for row in candidates
@@ -134,6 +137,9 @@ class Catalogs:
             )
         ]
         if exact:
+            identities = {clean(row.get("ИНН")) for row in exact if clean(row.get("ИНН"))}
+            if len(identities) > 1:
+                return None
             exact.sort(key=lambda row: (bool(clean(row.get("ИНН"))), bool(clean(row.get("КПП")))), reverse=True)
             return exact[0]
         return None
