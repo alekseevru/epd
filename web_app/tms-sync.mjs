@@ -317,31 +317,15 @@ async function getContractRows(session,onProgress){
 async function getAutoRows(session,filters,createdSince,onProgress){
   const supported=[];
   for(const fieldName of autoConsigneeFieldCandidates){
-    if(await supportsField(session,"OPERATION_SUB_DOC",fieldName)){
-      const stem=fieldName.endsWith("_NAME")?fieldName.slice(0,-5):fieldName;
-      const inn=await firstSupportedField(session,"OPERATION_SUB_DOC",[`${stem}_INN`,`${stem}_ITN`]);
-      const kpp=await firstSupportedField(session,"OPERATION_SUB_DOC",[`${stem}_KPP`]);
-      supported.push({name:fieldName,inn,kpp});
-    }
+    if(await supportsField(session,"OPERATION_SUB_DOC",fieldName))supported.push(fieldName);
   }
   if(!supported.length)return getRows(session,"OPERATION_SUB_DOC",autoFields,filters,createdSince,onProgress);
   const fields={...autoFields};
-  supported.forEach(({name,inn,kpp},index)=>{
-    fields[name]=`Грузополучатель (${index+1})`;
-    if(inn)fields[inn]=`ИНН грузополучателя (${index+1})`;
-    if(kpp)fields[kpp]=`КПП грузополучателя (${index+1})`;
-  });
+  supported.forEach((fieldName,index)=>{fields[fieldName]=`Грузополучатель (${index+1})`;});
   const rows=await getRows(session,"OPERATION_SUB_DOC",fields,filters,createdSince,onProgress);
   return rows.map(row=>{
-    const selected=supported.findIndex((_,index)=>String(row[`Грузополучатель (${index+1})`]||"").trim());
-    row["Грузополучатель"]=selected<0?"":String(row[`Грузополучатель (${selected+1})`]).trim();
-    row["ИНН грузополучателя"]=selected<0?"":String(row[`ИНН грузополучателя (${selected+1})`]||"").trim();
-    row["КПП грузополучателя"]=selected<0?"":String(row[`КПП грузополучателя (${selected+1})`]||"").trim();
-    supported.forEach((_,index)=>{
-      delete row[`Грузополучатель (${index+1})`];
-      delete row[`ИНН грузополучателя (${index+1})`];
-      delete row[`КПП грузополучателя (${index+1})`];
-    });
+    row["Грузополучатель"]=supported.map((_,index)=>String(row[`Грузополучатель (${index+1})`]||"").trim()).find(Boolean)||"";
+    supported.forEach((_,index)=>delete row[`Грузополучатель (${index+1})`]);
     return row;
   });
 }

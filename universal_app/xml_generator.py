@@ -529,19 +529,12 @@ class Generator:
         explicit_consignee = clean(value(row, "Грузополучатель"))
         consignee_text = re.split(r"\s+по\s+поручению\b", explicit_consignee, maxsplit=1, flags=re.IGNORECASE)[0]
         consignee_inn_match = re.search(r"\bИНН\s*[:№-]?\s*(\d{10}|\d{12})\b", consignee_text, flags=re.IGNORECASE)
-        consignee_inn = clean(value(row, "ИНН грузополучателя")) or (consignee_inn_match.group(1) if consignee_inn_match else "")
-        consignee_kpp = clean(value(row, "КПП грузополучателя"))
-        if not re.fullmatch(r"\d{10}|\d{12}", consignee_inn):
-            consignee_inn = ""
-        if not re.fullmatch(r"\d{9}", consignee_kpp):
-            consignee_kpp = ""
+        consignee_inn = consignee_inn_match.group(1) if consignee_inn_match else ""
         consignee_name = clean(re.sub(r"\s+ИНН\s*[:№-]?\s*\d{10,12}\b.*$", "", consignee_text, flags=re.IGNORECASE)) if explicit_consignee else client_name
         carrier_name = clean(value(row, "Исполнитель", "Партнер", "Перевозчик"))
         order_shipper_name = clean(value(row, "Грузоотправитель из заказа"))
         client_company = self.catalogs.company(client_name)
-        consignee_company = self.catalogs.company(consignee_name, inn=consignee_inn, kpp=consignee_kpp)
-        if not consignee_company and consignee_inn:
-            consignee_company = {"Наименование": consignee_name, "ИНН": consignee_inn, "КПП": consignee_kpp}
+        consignee_company = self.catalogs.company(consignee_name, inn=consignee_inn)
         carrier_company = self.catalogs.company(carrier_name)
         order_shipper_company = self.catalogs.company(order_shipper_name)
         driver_name = clean(value(row, "Водитель", "ФИО водителя"))
