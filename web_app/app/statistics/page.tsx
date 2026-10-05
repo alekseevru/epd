@@ -26,6 +26,7 @@ export default function Statistics(){
   const [items,setItems]=useState<Item[]>([]);
   const [tmsTrips,setTmsTrips]=useState<TmsTrip[]>([]);
   const [loading,setLoading]=useState(true),[error,setError]=useState("");
+  const [exporting,setExporting]=useState(false);
   const [month,setMonth]=useState(currentMonth),[expanded,setExpanded]=useState<string|null>(null);
   const [rankingMode,setRankingMode]=useState<"best"|"worst">("best"),[audience,setAudience]=useState<Audience>("carrier");
   const [backlogMode,setBacklogMode]=useState<BacklogMode>("carrier");
@@ -46,6 +47,29 @@ export default function Statistics(){
   const selectedBacklogRow=backlogRows.find(row=>row.key===expanded)||backlogRows[0];
   const maxBacklogTrips=Math.max(1,...backlogRows.map(row=>row.trips.length));
   const titleNumber=audience==="consignee"?3:2,entityLabel=audience==="consignee"?"Грузополучатель":"Перевозчик";
+  const exportBacklog=async()=>{
+    if(loading||exporting||!selectedTrips.length)return;
+    setExporting(true);setError("");
+    try{
+      const XLSX=await import("xlsx");
+      const groupLabel=backlogMode==="consignee"?"Грузополучатели":"Перевозчики";
+      const summaryRows:(string|number)[][]=[["Месяц","Разрез","Контрагент","Рейсы TMS","С ЭТрН","Backlog","Покрытие ЭТрН"]];
+      for(const row of backlogRows){const total=row.trips.length,withEtrn=row.trips.filter(trip=>Boolean(trip.etrnNumber)).length;summaryRows.push([month,groupLabel,row.name,total,withEtrn,total-withEtrn,total?withEtrn/total:0]);}
+      const detailRows:(string|number)[][]=[["Месяц","Грузополучатель","Перевозчик","Клиент","Контейнеры","Дата доставки на склад","Статус ЭТрН","Номер ЭТрН","Ссылка на ЭТрН","ID рейса TMS"]];
+      for(const row of backlogRows)for(const trip of row.trips)detailRows.push([month,consigneeName(trip.consignee),displayName(trip.carrier),trip.client,trip.container,trip.actualDeliveryDate,trip.etrnNumber?"С ЭТрН":"Backlog",trip.etrnNumber||"",trip.documentUrl||"",trip.id]);
+      const workbook=XLSX.utils.book_new();
+      const summary=XLSX.utils.aoa_to_sheet(summaryRows),details=XLSX.utils.aoa_to_sheet(detailRows);
+      summary["!cols"]=[{wch:12},{wch:19},{wch:48},{wch:14},{wch:12},{wch:12},{wch:18}];
+      details["!cols"]=[{wch:12},{wch:46},{wch:38},{wch:38},{wch:25},{wch:24},{wch:16},{wch:28},{wch:55},{wch:17}];
+      summary["!autofilter"]={ref:`A1:G${summaryRows.length}`};
+      details["!autofilter"]={ref:`A1:J${detailRows.length}`};
+      for(let index=2;index<=summaryRows.length;index++){const cell=summary[`G${index}`];if(cell)cell.z="0%";}
+      XLSX.utils.book_append_sheet(workbook,summary,"Сводка");
+      XLSX.utils.book_append_sheet(workbook,details,"Рейсы и контейнеры");
+      XLSX.writeFile(workbook,`backlog-${backlogMode}-${month}.xlsx`);
+    }catch(value){setError(value instanceof Error?value.message:"Не удалось выгрузить Excel");}
+    finally{setExporting(false);}
+  };
 
   return <main className={styles.shell}>
     <header className={styles.topbar}><div style={{background:"transparent"}}><img src="/agr-logo.png" alt="Логотип АГР" width={40} height={40} style={{display:"block",objectFit:"contain"}}/></div><strong>Создание ЭПД <small>версия {appPackage.version}</small></strong><nav><a href="/workspace">Создание документов</a><a href="/forwarding-orders">Поручения клиентам</a><a href="/control">Контроль подписания</a><a className={styles.active} href="/statistics">Статистика</a><a href="/edo-settings">Настройки ID ЭДО</a></nav></header>
@@ -61,7 +85,7 @@ export default function Statistics(){
         <article className={styles.chartCard}><header><div><small>ПОДПИСАНИЕ</small><h2>Доля подписанных · титул {titleNumber}</h2></div></header><div className={styles.donutWrap}><svg className={styles.donut} viewBox="0 0 120 120"><circle cx="60" cy="60" r="46"/><circle className={styles.donutValue} cx="60" cy="60" r="46" strokeDasharray={circumference} strokeDashoffset={circumference*(1-signedPercent/100)}/></svg><div className={styles.donutLabel}><strong>{signedPercent}%</strong><span>подписано</span></div></div><div className={styles.legend}><div><i className={styles.green}/><span>Подписано Т{titleNumber}</span><strong>{totals.signed}</strong></div><div><i className={styles.red}/><span>{audience==="carrier"?"Не подписано":"Отклонение"}</span><strong>{totals.unsigned}</strong></div></div></article>
       </section>}
       <section className={styles.carrierSection}><header><div><small>{audience==="consignee"?"ГРУЗОПОЛУЧАТЕЛИ":audience==="backlog"?"BACKLOG TMS":"ПЕРЕВОЗЧИКИ"}</small><h2>{audience==="backlog"?`Рейсы и выпуск ЭТрН за ${monthName(month)}`:`Подписание титула ${titleNumber} за ${monthName(month)}`}</h2><p>{audience==="backlog"?"Фактические рейсы взяты из ТТН/CMR по дате доставки на склад; рейсы без ЭТрН образуют backlog.":audience==="carrier"?"Учтены только ЭТрН с наступившей датой доставки.":"Отклонение — Т1 или Т2 подписан, дата доставки наступила, но Т3 не подписан."} Нажмите на строку для проверки реестра.</p></div><span>{audience==="backlog"?backlogRows.length:entities.length} {audience==="backlog"?(backlogMode==="carrier"?"перевозчиков":"грузополучателей"):audience==="consignee"?"грузополучателей":"перевозчиков"}</span></header>
-        {audience==="backlog"&&<div className={styles.backlogModeSwitch} role="group" aria-label="Разрез backlog"><button type="button" className={backlogMode==="carrier"?styles.on:""} aria-pressed={backlogMode==="carrier"} onClick={()=>{setBacklogMode("carrier");setExpanded(null)}}>Перевозчики</button><button type="button" className={backlogMode==="consignee"?styles.on:""} aria-pressed={backlogMode==="consignee"} onClick={()=>{setBacklogMode("consignee");setExpanded(null)}}>Грузополучатели</button></div>}
+        {audience==="backlog"&&<div className={styles.backlogToolbar}><div className={styles.backlogModeSwitch} role="group" aria-label="Разрез backlog"><button type="button" className={backlogMode==="carrier"?styles.on:""} aria-pressed={backlogMode==="carrier"} onClick={()=>{setBacklogMode("carrier");setExpanded(null)}}>Перевозчики</button><button type="button" className={backlogMode==="consignee"?styles.on:""} aria-pressed={backlogMode==="consignee"} onClick={()=>{setBacklogMode("consignee");setExpanded(null)}}>Грузополучатели</button></div><button type="button" className={styles.backlogExport} onClick={()=>void exportBacklog()} disabled={loading||exporting||!selectedTrips.length}>{exporting?"Готовим Excel…":"Выгрузить Excel с контейнерами"}</button></div>}
         {audience==="backlog"&&<div className={styles.backlogLayout}>
           <div className={styles.backlogCarriers}>
             <div className={styles.backlogPaneTitle}><span>{backlogMode==="carrier"?"Перевозчики":"Грузополучатели"}</span><span>Backlog</span></div>
