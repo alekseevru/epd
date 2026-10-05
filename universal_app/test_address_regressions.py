@@ -6,9 +6,19 @@ from address_xml import known_gar, complete_gar
 from data_sources import Catalogs
 from server_generator import Generator as ServerGenerator
 from xml_generator import Generator, TAGLEX, address_attributes, _set_address, _set_contract, cargo_packaging, known_point_phone, normalize_vehicle_number, party, vehicle_ownership_details
+from container_types import container_iso_from_ttn, container_tare_from_ttn
 
 
 class AddressRegressions(unittest.TestCase):
+    def test_forwarding_container_tare_comes_from_ttn_unit_type(self):
+        self.assertEqual(container_iso_from_ttn({"Типы грузовых единиц": "1x40HC"}, "ABCU1234567"), "40HC")
+        self.assertEqual(container_tare_from_ttn({"Типы грузовых единиц": "1x20GP"}, "ABCU1234567"), "2200")
+        self.assertEqual(container_tare_from_ttn({"Типы грузовых единиц": "1x40HC"}, "ABCU1234567"), "3700")
+        with self.assertRaisesRegex(ValueError, "Типы грузовых единиц"):
+            container_tare_from_ttn({}, "ABCU1234567")
+        with self.assertRaisesRegex(ValueError, "Типы грузовых единиц"):
+            container_tare_from_ttn({"Типы грузовых единиц": "1x20GP, 1x40HC"}, "ABCU1234567")
+
     def test_nbi_address(self):
         attrs = address_attributes('173008, Новгородская обл, Великий Новгород г, Магистральная ул, дом № 11/13')
         self.assertEqual((attrs['Индекс'], attrs['КодРегион'], attrs['Дом']), ('173008', '53', '11/13'))
@@ -410,6 +420,7 @@ class AddressRegressions(unittest.TestCase):
         context = {
             "planned_departure_datetime": date(2026, 9, 15),
             "container": "XYZU4002173",
+            "container_provider": "2",
             "weight": "1000",
             "cargo_name": "Груз",
             "shipper": party_data,
@@ -434,7 +445,8 @@ class AddressRegressions(unittest.TestCase):
         self.assertEqual(root.findtext(".//CargoOriginCountryInfo/Country"), "643")
         container = root.find(".//TransportContainer")
         self.assertEqual(container.get("ContainerOrderNumber"), "1")
-        self.assertEqual(container.get("IsContainerProvided"), "1")
+        self.assertEqual(container.get("IsContainerProvided"), "2")
+        self.assertIsNone(container.get("ContainerTareWeight"))
         self.assertEqual(container.get("TotalGrossWeight"), "1000")
         self.assertEqual(container.get("SealCount"), "1")
         self.assertEqual(container.findtext("IntContainerId"), "XYZU4002173")
@@ -448,6 +460,38 @@ class AddressRegressions(unittest.TestCase):
             ["Организация перевозки", "Погрузочные работы"],
         )
         self.assertIsNotNone(root.find(".//DestinationAddress/CargoDeliveryAddress/Address"))
+        context["container_provider"] = "1"
+        with self.assertRaisesRegex(ValueError, "массу тары"):
+            ServerGenerator.forwarding_order_userdata([context], "Иванов Иван Иванович")
+        context["container_tare"] = "3700"
+        with_tare = ET.fromstring(ServerGenerator.forwarding_order_userdata([context], "Иванов Иван Иванович"))
+        self.assertEqual(with_tare.find(".//TransportContainer").get("ContainerTareWeight"), "3700")
+        context.pop("container_provider")
+        with self.assertRaisesRegex(ValueError, "кто предоставил контейнер"):
+            ServerGenerator.forwarding_order_userdata([context], "Иванов Иван Иванович")
+
+    def test_forwarding_order_can_use_taglex_as_client_and_carrier_as_forwarder(self):
+        carrier = {"name": 'ООО "Перевозчик"', "inn": "7700000000", "kpp": "770001001", "address": "г. Москва"}
+        context = {
+            "planned_departure_datetime": date(2026, 9, 15),
+            "container": "XYZU4002173", "container_provider": "1", "container_iso": "40HC", "container_tare": "3700", "weight": "1000", "cargo_name": "Груз",
+            "consignee": carrier, "loading": "г. Москва", "delivery": "г. Санкт-Петербург",
+            "services": ["Организация автодоставки", "Перетарка"],
+            "client": carrier, "client_edo": "old-client-id",
+            "carrier": carrier, "carrier_edo": "carrier-id",
+            "carrier_contract": {"title": "Договор экспедиции", "number": "42", "date": "2026-09-01"},
+            "order_date": "15.09.2026", "order_number": "XYZU4002173",
+        }
+        root = ET.fromstring(ServerGenerator.forwarding_order_userdata(context, "Иванов Иван Иванович", "taglex_to_carrier"))
+        self.assertEqual(root.find(".//ClientInfo/OrganizationDetails").get("Inn"), TAGLEX["inn"])
+        self.assertEqual(root.find(".//Shipper/OrganizationDetails").get("Inn"), TAGLEX["inn"])
+        self.assertEqual(root.find(".//ForwarderInfo/OrganizationDetails").get("Inn"), carrier["inn"])
+        self.assertEqual(root.find(".//ForwardingContractRequisites").get("DocumentNumber"), "42")
+        self.assertEqual(root.find(".//CargoInfo").get("AcceptReq"), "1")
+        self.assertEqual(root.find(".//TransportContainer").get("IsContainerProvided"), "1")
+        self.assertEqual(root.find(".//TransportContainer").get("ISOContainer"), "40HC")
+        self.assertEqual(root.find(".//TransportContainer").get("ContainerTareWeight"), "3700")
+        self.assertEqual([item.get("ServiceName") for item in root.findall(".//LogisticsServiceInfo")], ["Организация автодоставки", "Перетарка"])
 
     def test_forwarding_route_prefers_dedicated_tms_fields(self):
         generator = ServerGenerator(Path(__file__).parent / "resources", Catalogs())

@@ -160,6 +160,8 @@ const autoConsigneeFieldCandidates=[
   "CONSIGNEE_NAME",
   "Грузополучатель",
 ];
+// «Типы грузовых единиц» in the TMS ТТН/CMR register (verified in DevTools).
+const autoUnitTypeField="UNIT_TYPES";
 
 function cookiesFrom(headers) {
   const values = typeof headers.getSetCookie === "function" ? headers.getSetCookie() : [headers.get("set-cookie") || ""];
@@ -319,9 +321,10 @@ async function getAutoRows(session,filters,createdSince,onProgress){
   for(const fieldName of autoConsigneeFieldCandidates){
     if(await supportsField(session,"OPERATION_SUB_DOC",fieldName))supported.push(fieldName);
   }
-  if(!supported.length)return getRows(session,"OPERATION_SUB_DOC",autoFields,filters,createdSince,onProgress);
   const fields={...autoFields};
   supported.forEach((fieldName,index)=>{fields[fieldName]=`Грузополучатель (${index+1})`;});
+  if(!await supportsField(session,"OPERATION_SUB_DOC",autoUnitTypeField))throw new Error("TMS не предоставила столбец «Типы грузовых единиц» (UNIT_TYPES) в ТТН/CMR. Обновление остановлено: без типа контейнера нельзя сформировать поручение экспедитору");
+  fields[autoUnitTypeField]="Типы грузовых единиц";
   const rows=await getRows(session,"OPERATION_SUB_DOC",fields,filters,createdSince,onProgress);
   return rows.map(row=>{
     row["Грузополучатель"]=supported.map((_,index)=>String(row[`Грузополучатель (${index+1})`]||"").trim()).find(Boolean)||"";

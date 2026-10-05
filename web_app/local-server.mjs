@@ -122,6 +122,8 @@ async function verifyKonturBox(accessToken) {
 }
 const konturDocumentFormat = (kind) => kind === "order"
   ? {TypeNamedId:"LogisticsOrderRequest",Function:"default",Version:"zakzvper_05_01_01"}
+  : kind === "forwarding"
+  ? {TypeNamedId:"LogisticsForwardingOrder",Function:"default",Version:"kl_porek_wt3_05_02_01"}
   : {TypeNamedId:"LogisticsWaybill",Function:"reception",Version:"kl_trn_mt_05_01"};
 const konturDraftJobs=new Map();
 const setKonturDraftJob=(id,patch)=>konturDraftJobs.set(id,{...konturDraftJobs.get(id),...patch,updatedAt:Date.now()});
@@ -472,7 +474,7 @@ const server = http.createServer((request, response) => {
       try {
         if(response.writableEnded)return;
         const payload=JSON.parse(Buffer.concat(chunks).toString("utf8"));
-        if(!["cargo","empty","order"].includes(payload.kind)) throw new Error("Неизвестный вид документа");
+        if(!["cargo","empty","order","forwarding"].includes(payload.kind)) throw new Error("Неизвестный вид документа");
         if(!payload.content||typeof payload.content!=="string") throw new Error("XML документа не передан");
         const jobId=randomBytes(16).toString("hex");
         konturDraftJobs.set(jobId,{state:"queued",phase:"queued",message:"Операция поставлена в очередь",createdAt:Date.now(),updatedAt:Date.now()});
@@ -485,6 +487,34 @@ const server = http.createServer((request, response) => {
     const jobId=url.searchParams.get("jobId")||""; const job=konturDraftJobs.get(jobId);
     if(!job){response.writeHead(404,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({error:"Операция передачи не найдена. Возможно, сервер был перезапущен."}));return;}
     response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify(job));return;
+  }
+  if(request.method==="POST"&&url.pathname==="/api/kontur/document-presence"){
+    let body="";request.setEncoding("utf8");request.on("data",chunk=>{body+=chunk;if(body.length>20_000)request.destroy();});
+    request.on("end",()=>void(async()=>{try{
+      const requested=JSON.parse(body).containers;
+      const containers=[...new Set((Array.isArray(requested)?requested:[]).map(value=>String(value||"").trim().toUpperCase()).filter(value=>/^[A-Z]{4}\d{7}$/.test(value)))].slice(0,20);
+      if(!containers.length)throw new Error("Не указаны номера контейнеров");
+      const config=konturConfig(),accessToken=await getKonturAccessToken();
+      const items=await mapLimit(containers,3,async container=>{
+        const found={cargo:false,order:false,empty:false,forwarding:false};
+        const result=await diadocJson(`/V5/SearchDocflows?boxId=${encodeURIComponent(config.boxId)}`,accessToken,{method:"POST",body:JSON.stringify({QueryString:container,Scope:"SearchScopeAny",Count:100})});
+        for(const item of result.Documents||[]){
+          if(item.DocumentInfo?.IsDeleted)continue;
+          const id=item.DocumentId||{},info=item.DocumentInfo||{};
+          const type=info.DocumentType?.TypeNamedId||info.FullVersion?.TypeNamedId||"";
+          if(!["LogisticsWaybill","LogisticsOrderRequest","LogisticsForwardingOrder"].includes(type))continue;
+          const number=String(info.DocumentNumber||"");
+          let xml="";try{if(id.MessageId&&id.EntityId)xml=await diadocEntityText(accessToken,config.boxId,id.MessageId,id.EntityId);}catch{/* An unreadable title is not evidence of a match. */}
+          if(!new RegExp(`(^|[^A-Z0-9])${container}([^A-Z0-9]|$)`,"i").test(`${number} ${xml}`))continue;
+          if(type==="LogisticsOrderRequest")found.order=true;
+          else if(type==="LogisticsForwardingOrder")found.forwarding=true;
+          else if(/(?:^|[-_\s])EMPTY(?:$|[-_\s])/i.test(number)||/Порожн/i.test(xml))found.empty=true;
+          else if(/(?:^|[-_\s])CARGO(?:$|[-_\s])/i.test(number)||/СвГруз|Грузоотпр/i.test(xml))found.cargo=true;
+        }
+        return {container,found};
+      });
+      response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify({items}));
+    }catch(error){response.writeHead(502,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify({error:error.message||"Не удалось проверить документы в Диадоке"}));}})());return;
   }
   if(request.method==="GET"&&url.pathname==="/api/kontur/signing-control"){
     void(async()=>{try{const force=url.searchParams.get("refresh")==="1";if(force||!signingControlCache.value||signingControlCache.expiresAt<Date.now()){signingControlCache.value=await loadSigningControl();signingControlCache.expiresAt=Date.now()+5*60_000;}response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify(signingControlCache.value));}catch(error){const unauthorized=["Сначала подключите","Сеанс Контур","invalid_grant","Invalid auth token"].some(text=>error.message?.includes(text));response.writeHead(unauthorized?401:502,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify({error:unauthorized?"Сеанс Контур истёк. Выполните вход повторно":error.message||"Не удалось получить статусы документов из Контур"}));}})();return;
@@ -509,7 +539,9 @@ const server = http.createServer((request, response) => {
       const generatedData=await sendGeneratorRequest({...payload,action:"forwarding_userdata_multi",date:payload.date||new Date().toISOString().slice(0,10)});if(generatedData.error)throw new Error(generatedData.error);
       const config=konturConfig();const accessToken=await getKonturAccessToken();const generateUrl=`${diadocApiUrl}/GenerateTitleXml?boxId=${encodeURIComponent(config.boxId)}&documentTypeNamedId=LogisticsForwardingOrder&documentFunction=default&documentVersion=kl_porek_wt3_05_02_01&titleIndex=0`;
       const generated=await fetch(generateUrl,{method:"POST",headers:{Authorization:`Bearer ${accessToken}`,"Content-Type":"application/xml; charset=utf-8"},body:generatedData.userDataXml,signal:AbortSignal.timeout(45_000)});const bytes=Buffer.from(await generated.arrayBuffer());if(!generated.ok)throw new Error(new TextDecoder().decode(bytes)||`Диадок вернул HTTP ${generated.status}`);
-      response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify({filename:`Поручение-${String(payload.orderNumber).replace(/[^a-zа-я0-9._-]+/gi,"-")}-${new Date().toISOString().slice(0,10)}.xml`,content:bytes.toString("base64")}));
+      const officialId=xmlAttribute(bytes.toString("utf8"),"ИдФайл");
+      const filename=payload.direction==="taglex_to_carrier"&&officialId?`${officialId}.xml`:`Поручение-${String(payload.orderNumber).replace(/[^a-zа-я0-9._-]+/gi,"-")}-${new Date().toISOString().slice(0,10)}.xml`;
+      response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify({filename,content:bytes.toString("base64")}));
     }catch(error){response.writeHead(400,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({error:error.message||"Не удалось сформировать поручение"}));}})());return;
   }
   if(request.method==="POST"&&url.pathname==="/api/kontur/forwarding-revoke/send"){
