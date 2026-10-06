@@ -74,7 +74,11 @@ class Generator(BaseGenerator):
             if not loading_found:
                 warnings.append("Полный адрес погрузки не найден в справочнике точек маршрута.")
             if not (ctx.get("consignee") if empty else ctx.get("loading_owner")).get("inn"):
-                warnings.append("В справочнике точек маршрута не найден владелец объекта пункта погрузки.")
+                warnings.append("В TMS не указан владелец объекта пункта погрузки. Заполните пустые поля владельца вручную перед формированием ЭТрН или проверьте их в Контуре перед подписанием.")
+            if not empty and not ctx.get("loading_owner", {}).get("name"):
+                warnings.append("Не указано название владельца объекта пункта погрузки.")
+            if not empty and not ctx.get("loading_owner", {}).get("address"):
+                warnings.append("Не указан юридический адрес владельца объекта пункта погрузки.")
             if not (ctx.get("consignee") if empty else ctx.get("loading_owner")).get("phone"):
                 warnings.append("Для владельца объекта пункта погрузки не заполнен телефон в справочнике.")
             if not empty and not ctx.get("delivery_point_found"):

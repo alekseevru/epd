@@ -263,13 +263,16 @@ def party(company: dict | None, fallback_name: str = "") -> dict:
     company = company or {}
     name = organization_name(company, fallback_name)
     known = known_party_details(name or fallback_name)
-    inn = clean(company.get("ИНН")) or known.get("inn", "")
+    embedded_inn = re.search(r"\bИНН\s*[:№-]?\s*(\d{10}|\d{12})\b", clean(company.get("Наименование")), re.IGNORECASE)
+    inn = clean(company.get("ИНН")) or (embedded_inn.group(1) if embedded_inn else "") or known.get("inn", "")
     result = {
         "name": name,
         "inn": inn,
         "kpp": clean(company.get("КПП")) or known.get("kpp", ""),
         "phone": normalize_phone(company.get("Телефон") or company.get("Телефон (раб.)")) or KNOWN_PARTY_PHONES.get(inn, "") or known_party_phone(name) or known.get("phone", ""),
         "address": clean(company.get("Фактический адрес") or company.get("Юридический адрес")) or known.get("address", ""),
+        "is_ip": bool(re.search(r"(?:^|\s)ИП(?:\s|$)", name or fallback_name, re.IGNORECASE) and len(inn) == 12),
+        "ip_fio": re.sub(r"(?:^ИП\s+|\s+ИП$)", "", clean(company.get("Наименование") or fallback_name), flags=re.IGNORECASE),
     }
     if inn == AGS_INN or is_ags(name or fallback_name):
         result.update(AGS_DETAILS)
@@ -367,6 +370,15 @@ def _set_legal(node: ET.Element | None, data: dict, *, use_taglex_gar: bool = Tr
     if node is None:
         return
     legal = node.find(".//СвЮЛУч")
+    if legal is not None and data.get("is_ip"):
+        parent = next((item for item in node.iter() if legal in list(item)), None)
+        if parent is not None:
+            index = list(parent).index(legal)
+            parent.remove(legal)
+            ip = ET.Element("СвИП", {"ИННФЛ": data["inn"]})
+            ET.SubElement(ip, "ФИО", _fio(data.get("ip_fio") or data["name"]))
+            parent.insert(index, ip)
+        legal = None
     if legal is not None:
         legal.attrib = {"НаимОрг": data["name"] or "Не указано", "ИННЮЛ": data["inn"] or "0000000000"}
         if data.get("kpp"):
@@ -534,7 +546,7 @@ class Generator:
         carrier_name = clean(value(row, "Исполнитель", "Партнер", "Перевозчик"))
         order_shipper_name = clean(value(row, "Грузоотправитель из заказа"))
         client_company = self.catalogs.company(client_name)
-        consignee_company = self.catalogs.company(consignee_name, inn=consignee_inn)
+        consignee_company = self.catalogs.company(consignee_text or consignee_name, inn=consignee_inn)
         carrier_company = self.catalogs.company(carrier_name)
         order_shipper_company = self.catalogs.company(order_shipper_name)
         driver_name = clean(value(row, "Водитель", "ФИО водителя"))
@@ -593,7 +605,14 @@ class Generator:
             result = party(company, clean((point or {}).get("Название")))
             result["inn"] = result.get("inn") or inn
             if point:
-                result["address"] = point_address(point, result.get("address"))
+                # The route point is a place, not proof of its legal owner.
+                # Without an owner INN, do not present the station's name or
+                # physical address as the owner's legal details.
+                if not result["inn"]:
+                    result["name"] = ""
+                    result["address"] = ""
+                else:
+                    result["address"] = point_address(point, result.get("address"))
                 result["phone"] = normalize_phone(point.get("Номер телефона")) or known_point_phone(point) or result.get("phone", "")
             if inn in KNOWN_POINT_PARTY_DETAILS_BY_INN:
                 result.update(KNOWN_POINT_PARTY_DETAILS_BY_INN[inn])
@@ -794,7 +813,7 @@ class Generator:
         owner_data = dict(ctx["consignee"]) if empty else ctx["loading_owner"]
         if empty:
             owner_data["address"] = ctx["delivery"]
-        if owner is not None and owner_data.get("inn"):
+        if owner is not None and owner_data.get("inn") and owner_data.get("name"):
             owner.set("СовпГОВ", "2")
             _set_legal(owner, owner_data)
         elif owner is not None:

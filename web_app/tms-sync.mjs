@@ -30,7 +30,8 @@ const cargoFields = {
 
 const companyFields = {
   ID:"Номер записи", LIST_COMPANY_NAME:"Наименование", LIST_COMPANY_NAME_LARGE:"Полное наименование",
-  LIST_COMPANY_NAME_SMALL:"Краткое наименование", INN:"ИНН", KPP:"КПП", EMAIL:"E-mail", PHONE:"Телефон",
+  LIST_COMPANY_NAME_SMALL:"Краткое наименование", ID_LIST_FORM:"Код формы собственности",
+  ID_LIST_TYPE_COMPANY:"Код типа компании", INN:"ИНН", KPP:"КПП", EMAIL:"E-mail", PHONE:"Телефон",
   PHONE2:"Телефон (раб.)", ROLES_NAMES:"Роли", FIRST_UR_COMPANY_ADDRESS_ADDRESS_TEXT:"Юридический адрес",
   FIRST_ACTUAL_COMPANY_ADDRESS_ADDRESS_TEXT:"Фактический адрес",
 };

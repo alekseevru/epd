@@ -62,6 +62,7 @@ def prepare_manual_fields(ctx, kind, stored=None, submitted=None):
             if kind != "empty":
                 add("loading_owner.name", "Название владельца пункта погрузки", scope, "name", owner.get("name"), lambda v: owner.__setitem__("name", v))
                 add("loading_owner.inn", "ИНН владельца пункта погрузки", scope, "inn", owner.get("inn"), lambda v: owner.__setitem__("inn", v), lambda v: bool(re.fullmatch(r"(?:\d{10}|\d{12})", v)))
+                add("loading_owner.address", "Юридический адрес владельца пункта погрузки", scope, "address", owner.get("address"), lambda v: owner.__setitem__("address", v), lambda v: len(v) >= 12)
             add("loading_owner.phone", "Телефон владельца пункта погрузки", scope, "phone", owner.get("phone"), lambda v: owner.__setitem__("phone", v), lambda v: len(re.sub(r"\D", "", v)) >= 10)
     contract_role = "carrier" if kind == "order" else "client"
     contract_key = "carrier_contract" if kind == "order" else "client_contract"
