@@ -1,6 +1,6 @@
 import unittest
 import xml.etree.ElementTree as ET
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from address_xml import known_gar, complete_gar
 from data_sources import Catalogs
@@ -475,7 +475,8 @@ class AddressRegressions(unittest.TestCase):
         context = {
             "planned_departure_datetime": date(2026, 9, 15),
             "container": "XYZU4002173", "container_provider": "1", "container_iso": "40HC", "container_tare": "3700", "weight": "1000", "cargo_name": "Груз",
-            "consignee": carrier, "loading": "г. Москва", "delivery": "г. Санкт-Петербург",
+            "consignee": carrier, "loading": "г. Москва", "delivery": "г. Санкт-Петербург", "cargo_route": "Москва -> Санкт-Петербург",
+            "forwarding_delivery_datetime": datetime(2026, 9, 22, 20, 0),
             "services": ["Организация автодоставки", "Перетарка"],
             "client": carrier, "client_edo": "old-client-id",
             "carrier": carrier, "carrier_edo": "carrier-id",
@@ -488,6 +489,13 @@ class AddressRegressions(unittest.TestCase):
         self.assertEqual(root.find(".//ForwarderInfo/OrganizationDetails").get("Inn"), carrier["inn"])
         self.assertEqual(root.find(".//ForwardingContractRequisites").get("DocumentNumber"), "42")
         self.assertEqual(root.find(".//CargoInfo").get("AcceptReq"), "1")
+        self.assertEqual(root.find(".//CargoInfo").get("CargoRoute"), "Москва -> Санкт-Петербург")
+        self.assertEqual(root.find(".//CargoInfo").get("DeliveryFromDate"), "22.09.2026")
+        self.assertEqual(root.find(".//CargoInfo").get("DeliveryToDate"), "22.09.2026")
+        self.assertEqual(root.find(".//CargoInfo").get("DeliveryTime"), "20:00-20:00+03:00")
+        self.assertEqual(root.find(".//ClientDirectives").get("TransportationDirectives"), "нет")
+        self.assertEqual(root.find(".//ClientDirectives").get("SpecialInformation"), "нет")
+        self.assertIsNotNone(root.find(".//ClientDirectives/ClimateTransportRegime"))
         self.assertEqual(root.find(".//TransportContainer").get("IsContainerProvided"), "1")
         self.assertEqual(root.find(".//TransportContainer").get("ISOContainer"), "40HC")
         self.assertEqual(root.find(".//TransportContainer").get("ContainerTareWeight"), "3700")

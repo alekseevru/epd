@@ -140,16 +140,24 @@ class Generator(BaseGenerator):
         order = ET.SubElement(root, "ClientForwarderOrder")
         cargo_infos = ET.SubElement(order, "CargoInfos")
         for cargo_index, cargo_ctx in enumerate(contexts, start=1):
+            delivery_datetime = cargo_ctx.get("forwarding_delivery_datetime")
+            delivery_time = delivery_datetime.strftime("%H:%M") if delivery_datetime else ""
             cargo = ET.SubElement(cargo_infos, "CargoInfo", {
                 "ReadyFromDate":cargo_ctx["planned_departure_datetime"].strftime("%d.%m.%Y"),
                 "ReadyToDate":cargo_ctx["planned_departure_datetime"].strftime("%d.%m.%Y"),
+                **({"DeliveryFromDate":delivery_datetime.strftime("%d.%m.%Y"),
+                    "DeliveryToDate":delivery_datetime.strftime("%d.%m.%Y"),
+                    "DeliveryTime":f"{delivery_time}-{delivery_time}+03:00"} if delivery_datetime else {}),
                 "TransportationIndicator":"1", "CargoBatchId":str(uuid.uuid4()), "ShipmentCargoSpaceQuantity":"1", "NotifyReq":"0",
+                **({"CargoRoute":str(cargo_ctx["cargo_route"])[:1000]} if cargo_ctx.get("cargo_route") else {}),
                 **({"AcceptReq":"1"} if carrier_forwarder else {}),
             })
             org(ET.SubElement(cargo,"Consignee"),cargo_ctx["consignee"],cargo_ctx.get("consignee_edo",""))
             shipper = TAGLEX if carrier_forwarder else cargo_ctx.get("order_shipper") or (cargo_ctx.get("loading_owner") if (cargo_ctx.get("loading_owner") or {}).get("inn") else cargo_ctx["client"])
             org(ET.SubElement(cargo,"Shipper"),shipper)
             ET.SubElement(ET.SubElement(cargo,"TransportInfos"),"TransportInfo",{"TransportType":"1","BodyType":"Контейнеровоз"})
+            directives=ET.SubElement(cargo,"ClientDirectives",{"TransportationDirectives":"нет","SpecialInformation":"нет"})
+            ET.SubElement(directives,"ClimateTransportRegime")
             weight = cargo_ctx.get("weight") or "0"
             ET.SubElement(cargo,"BatchWeight",{"NetWeight":weight,"GrossWeight":weight})
             descriptions=ET.SubElement(cargo,"ItemDescriptions")

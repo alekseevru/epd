@@ -192,6 +192,9 @@ def handle(request):
             context = generator.context({**cargo, **(auto or {}), "_container":container_number}, date.fromisoformat(request.get("date") or date.today().isoformat()), user, None)
             context["order_number"] = clean(request.get("orderNumber")) or context["order_number"]
             context["services"] = services
+            context["cargo_route"] = clean(value(auto, "Маршрут"))
+            unloading = value(auto, "Плановая дата прибытия", "Последняя план дата прибытия", "ETA (план дата прибытия)")
+            context["forwarding_delivery_datetime"] = context["planned_arrival_datetime"] if clean(unloading) else None
             # For workspace orders Taglex is the customer and provides the container.
             # In the separate client-to-Taglex flow Taglex is the forwarder.
             context["container_provider"] = "1" if request.get("direction") == "taglex_to_carrier" else "2"

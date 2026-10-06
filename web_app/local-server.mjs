@@ -394,7 +394,7 @@ function failPendingDocuments(message){
 }
 function startGeneratorWorker(){
   workerBuffer="";
-  generatorWorker=spawn(python,[workerScript],{cwd:path.dirname(workerScript),stdio:["pipe","pipe","inherit"],env:{...process.env,
+  generatorWorker=spawn(python,[workerScript],{cwd:path.dirname(workerScript),stdio:["pipe","pipe","inherit"],env:{...process.env,PYTHONIOENCODING:"utf-8",
     AGR_COMPANIES_FILE:process.env.AGR_COMPANIES_FILE||path.join(referenceRoot,"companies.xlsx"),
     AGR_EDO_FILE:process.env.AGR_EDO_FILE||path.join(referenceRoot,"counteragents.csv"),
     AGR_VEHICLES_FILE:process.env.AGR_VEHICLES_FILE||path.join(referenceRoot,"vehicles.xlsx"),
