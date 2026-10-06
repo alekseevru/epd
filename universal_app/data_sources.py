@@ -120,10 +120,6 @@ class Catalogs:
     def company(self, name: str = "", inn: str = "", kpp: str = "") -> dict | None:
         inn, kpp = clean(inn), clean(kpp)
         candidates = self.companies
-        if inn:
-            exact = [r for r in candidates if clean(r.get("ИНН")) == inn and (not kpp or clean(r.get("КПП")) == kpp)]
-            if exact:
-                return exact[0]
         key = normalize_name(name)
         exact = [
             row for row in candidates
@@ -134,8 +130,14 @@ class Catalogs:
             )
         ]
         if exact:
-            exact.sort(key=lambda row: (bool(clean(row.get("ИНН"))), bool(clean(row.get("КПП")))), reverse=True)
-            return exact[0]
+            matching_inn = [row for row in exact if not inn or clean(row.get("ИНН")) == inn or inn in clean(row.get("Наименование"))]
+            if matching_inn:
+                matching_inn.sort(key=lambda row: (bool(clean(row.get("ИНН"))), bool(clean(row.get("КПП")))), reverse=True)
+                return matching_inn[0]
+        if inn:
+            matching_inn = [r for r in candidates if clean(r.get("ИНН")) == inn and (not kpp or clean(r.get("КПП")) == kpp)]
+            if matching_inn:
+                return matching_inn[0]
         return None
 
     def edo_id(self, company: dict | None) -> str:

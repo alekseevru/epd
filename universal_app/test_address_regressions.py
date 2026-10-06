@@ -7,9 +7,63 @@ from data_sources import Catalogs
 from server_generator import Generator as ServerGenerator
 from xml_generator import Generator, TAGLEX, address_attributes, _set_address, _set_contract, cargo_packaging, known_point_phone, normalize_vehicle_number, party, vehicle_ownership_details
 from container_types import container_iso_from_ttn, container_tare_from_ttn
+from manual_corrections import prepare_manual_fields
 
 
 class AddressRegressions(unittest.TestCase):
+    def test_missing_loading_point_owner_prompts_for_blank_manual_fields(self):
+        catalogs = Catalogs()
+        catalogs.points = [{
+            "Название": "Ростов-Западный", "Номер склада и название": "510401 Ростов-Западный",
+            "Адрес на русском языке": "Ростов-на-Дону, улица Мадояна, 316", "ИНН": "",
+        }]
+        generator = ServerGenerator(Path(__file__).parent / "resources", catalogs)
+        context = generator.context({
+            "_container": "TEMU7742835", "Маршрут": "(RU) Ростов-Западный -> (RU) Склад Росшина",
+            "Клиент": "Тестовый клиент", "Исполнитель": "Тестовый перевозчик",
+        }, date(2026, 10, 6), "Иванов Иван Иванович")
+        self.assertEqual(context["loading_owner"]["name"], "")
+        self.assertEqual(context["loading_owner"]["inn"], "")
+        self.assertEqual(context["loading_owner"]["address"], "")
+        fields, _ = prepare_manual_fields(context, "cargo")
+        ids = {field["id"] for field in fields}
+        self.assertTrue({"loading_owner.name", "loading_owner.inn", "loading_owner.address", "loading_owner.phone"} <= ids)
+        self.assertTrue(any("Заполните пустые поля владельца" in item for item in generator.warnings(context)))
+        _, content = Generator(Path(__file__).parent / "resources", catalogs).etrn(context)
+        self.assertIsNone(ET.fromstring(content).find(".//СвПогруз/ВладИнфр"))
+
+    def test_etrn_prefers_named_consignee_card_and_ip_carrier(self):
+        catalogs = Catalogs()
+        catalogs.companies = [
+            {"Наименование": 'ООО "РОСШИНА-ИНВЕСТ (По поручению ООО «Тяговая сила»',
+             "Краткое наименование": 'ОООО "РОСШИНА-ИНВЕСТ (По поручению ООО «Тяговая сила»',
+             "ИНН": "2312229583", "КПП": "231101001", "Юридический адрес": "Краснодарский край, г. Краснодар"},
+            {"Наименование": "РОСШИНА-ИНВЕСТ ООО г.Краснодар ИНН2312229583",
+             "ИНН": "", "КПП": "231101001", "Юридический адрес": "350056, Краснодарский край, г. Краснодар, ул. Пискижева, д. 48"},
+            {"Наименование": "Токарев Сергей Владимирович ИП", "Краткое наименование": "ИП Токарев",
+             "ИНН": "614314841879", "Юридический адрес": "346880, Ростовская обл, г. Батайск"},
+        ]
+        generator = Generator(Path(__file__).parent / "resources", catalogs)
+        context = generator.context({
+            "_container": "TEMU7742835", "Клиент": 'ООО "РОСШИНА-ИНВЕСТ"',
+            "Грузополучатель": "РОСШИНА-ИНВЕСТ ООО г.Краснодар ИНН2312229583",
+            "Исполнитель": "Токарев Сергей Владимирович ИП",
+        }, date(2026, 10, 6), "Иванов Иван Иванович")
+        self.assertEqual(context["consignee"]["inn"], "2312229583")
+        self.assertTrue(context["consignee"]["address"].startswith("350056"))
+        for empty in (False, True):
+            _, content = generator.etrn(context, empty=empty)
+            root = ET.fromstring(content)
+            carrier = root.find(".//СвПер/ИдСв/СвИП")
+            self.assertEqual(carrier.get("ИННФЛ"), "614314841879")
+            self.assertEqual(carrier.find("ФИО").attrib, {"Фамилия": "Токарев", "Имя": "Сергей", "Отчество": "Владимирович"})
+            self.assertIsNone(root.find(".//СвПер/ИдСв/СвЮЛУч"))
+            if not empty:
+                consignee = root.find(".//СвГП/РекИдентГП/ИдСв/СвЮЛУч")
+                self.assertEqual(consignee.get("ИННЮЛ"), "2312229583")
+                self.assertIn("г.Краснодар", consignee.get("НаимОрг"))
+                self.assertEqual(root.find(".//СвГП//Адрес/АдрРФ").get("Индекс"), "350056")
+
     def test_forwarding_container_tare_comes_from_ttn_unit_type(self):
         self.assertEqual(container_iso_from_ttn({"Типы грузовых единиц": "1x40HC"}, "ABCU1234567"), "40HC")
         self.assertEqual(container_tare_from_ttn({"Типы грузовых единиц": "1x20GP"}, "ABCU1234567"), "2200")
