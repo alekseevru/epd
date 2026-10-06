@@ -8,6 +8,7 @@ import { randomBytes } from "node:crypto";
 import * as XLSX from "xlsx";
 import { syncTms, contractRowsToCatalog, generateTmsCaptcha, TmsCaptchaError } from "./tms-sync.mjs";
 import { isTmsApiConfigured, resolveTmsCredentials } from "./tms-credentials.mjs";
+import { activeForwardingDrafts, containsContainer } from "./kontur-document-presence.mjs";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const appPackage = JSON.parse(fs.readFileSync(path.join(root,"package.json"),"utf8"));
@@ -161,6 +162,7 @@ async function createKonturDraft(jobId,payload){
     if(!apiResponse||apiResponse.status===204) throw new Error("Диадок продолжает обрабатывать черновик дольше 90 секунд. Повторите передачу позднее.");
     const document=result.Entities?.find(item=>item.EntityType==="Attachment")||result.Entities?.[0];
     setKonturDraftJob(jobId,{state:"saved",phase:"complete",message:"Черновик создан",messageId:result.MessageId||null,entityId:document?.EntityId||null});
+    if(payload.kind==="forwarding")forwardingDraftCache.expiresAt=0;
   } catch(error) {
     const message=error?.name==="TimeoutError"?"Контур не ответил за 90 секунд. Проверьте доступность API и повторите передачу":error.message||"Не удалось создать черновик в Контуре";
     setKonturDraftJob(jobId,{state:"error",phase:"failed",message});
@@ -242,9 +244,33 @@ const runCounteragentSync=onProgress=>{if(!counteragentSyncPromise)counteragentS
 const konturDocumentUrl=(boxId,messageId,logisticsId,typeNamedId)=>{
   const normalizedBoxId=String(boxId||"").replace(/@diadoc\.ru$/i,"");
   if(typeNamedId==="LogisticsWaybill"&&normalizedBoxId&&logisticsId)return `https://logist.kontur.ru/${encodeURIComponent(normalizedBoxId)}/consignor/sign/waybill/${encodeURIComponent(logisticsId)}`;
+  if(typeNamedId==="LogisticsForwardingOrder"&&normalizedBoxId&&logisticsId)return `https://logist.kontur.ru/${encodeURIComponent(normalizedBoxId)}/consignor/sign/forwardingOrder/${encodeURIComponent(logisticsId)}`;
+  if(typeNamedId==="LogisticsOrderRequest"&&normalizedBoxId&&messageId&&logisticsId)return `https://diadoc.kontur.ru/${encodeURIComponent(normalizedBoxId)}/Document/Show?letterId=${encodeURIComponent(messageId)}&documentId=${encodeURIComponent(logisticsId)}`;
   const template=process.env.KONTUR_DOCUMENT_URL_TEMPLATE||"";
   return template?template.replaceAll("{boxId}",encodeURIComponent(normalizedBoxId)).replaceAll("{messageId}",encodeURIComponent(messageId)).replaceAll("{entityId}",encodeURIComponent(logisticsId)):null;
 };
+let forwardingDraftCache={expiresAt:0,items:[],pending:null};
+async function loadActiveForwardingDrafts(accessToken,boxId){
+  if(forwardingDraftCache.expiresAt>Date.now())return forwardingDraftCache.items;
+  if(forwardingDraftCache.pending)return forwardingDraftCache.pending;
+  forwardingDraftCache.pending=(async()=>{
+    const events=[];let afterIndexKey="",complete=false;
+    for(let page=0;page<20;page++){
+      const body={MessageTypes:["Draft"],TypeNamedIds:["LogisticsForwardingOrder"],Limit:100,PopulateDocuments:true,Filter:{SortDirection:"Descending"},...(afterIndexKey?{AfterIndexKey:afterIndexKey}:{})};
+      const result=await diadocJson(`/V4/GetDocflowEvents?boxId=${encodeURIComponent(boxId)}`,accessToken,{method:"POST",body:JSON.stringify(body)});
+      const portion=result.Events||[];events.push(...portion);
+      if(portion.length<100){complete=true;break;}
+      const next=portion.at(-1)?.IndexKey||"";
+      if(!next||next===afterIndexKey)throw new Error("Не удалось прочитать все страницы черновиков ПЭ из Диадока");
+      afterIndexKey=next;
+    }
+    if(!complete)throw new Error("Слишком много событий черновиков ПЭ: проверка неполная");
+    forwardingDraftCache.items=activeForwardingDrafts(events);
+    forwardingDraftCache.expiresAt=Date.now()+60_000;
+    return forwardingDraftCache.items;
+  })();
+  try{return await forwardingDraftCache.pending;}finally{forwardingDraftCache.pending=null;}
+}
 let signingControlCache={expiresAt:0,value:null};
 const statisticsCache=new Map();
 const actualDeliveryValue=row=>row["Фактическая дата доставки на склад"]||row["Фактическая дата прибытия"]||row["Фактическая дата доставки"]||row["Actual delivery date"]||"";
@@ -495,8 +521,10 @@ const server = http.createServer((request, response) => {
       const containers=[...new Set((Array.isArray(requested)?requested:[]).map(value=>String(value||"").trim().toUpperCase()).filter(value=>/^[A-Z]{4}\d{7}$/.test(value)))].slice(0,20);
       if(!containers.length)throw new Error("Не указаны номера контейнеров");
       const config=konturConfig(),accessToken=await getKonturAccessToken();
+      const drafts=await loadActiveForwardingDrafts(accessToken,config.boxId);
       const items=await mapLimit(containers,3,async container=>{
         const found={cargo:false,order:false,empty:false,forwarding:false};
+        const links={};
         const result=await diadocJson(`/V5/SearchDocflows?boxId=${encodeURIComponent(config.boxId)}`,accessToken,{method:"POST",body:JSON.stringify({QueryString:container,Scope:"SearchScopeAny",Count:100})});
         for(const item of result.Documents||[]){
           if(item.DocumentInfo?.IsDeleted)continue;
@@ -506,12 +534,16 @@ const server = http.createServer((request, response) => {
           const number=String(info.DocumentNumber||"");
           let xml="";try{if(id.MessageId&&id.EntityId)xml=await diadocEntityText(accessToken,config.boxId,id.MessageId,id.EntityId);}catch{/* An unreadable title is not evidence of a match. */}
           if(!new RegExp(`(^|[^A-Z0-9])${container}([^A-Z0-9]|$)`,"i").test(`${number} ${xml}`))continue;
-          if(type==="LogisticsOrderRequest")found.order=true;
-          else if(type==="LogisticsForwardingOrder")found.forwarding=true;
-          else if(/(?:^|[-_\s])EMPTY(?:$|[-_\s])/i.test(number)||/Порожн/i.test(xml))found.empty=true;
-          else if(/(?:^|[-_\s])CARGO(?:$|[-_\s])/i.test(number)||/СвГруз|Грузоотпр/i.test(xml))found.cargo=true;
+          let kind="";
+          if(type==="LogisticsOrderRequest")kind="order";
+          else if(type==="LogisticsForwardingOrder")kind="forwarding";
+          else if(/(?:^|[-_\s])EMPTY(?:$|[-_\s])/i.test(number)||/Порожн/i.test(xml))kind="empty";
+          else if(/(?:^|[-_\s])CARGO(?:$|[-_\s])/i.test(number)||/СвГруз|Грузоотпр/i.test(xml))kind="cargo";
+          if(kind){found[kind]=true;links[kind] ||= konturDocumentUrl(config.boxId,id.MessageId,id.EntityId,type);}
         }
-        return {container,found};
+        const draft=drafts.find(item=>containsContainer(item.number,container));
+        if(draft){found.forwarding=true;links.forwarding=konturDocumentUrl(config.boxId,draft.messageId,draft.entityId,"LogisticsForwardingOrder");}
+        return {container,found,links};
       });
       response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify({items}));
     }catch(error){response.writeHead(502,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify({error:error.message||"Не удалось проверить документы в Диадоке"}));}})());return;
