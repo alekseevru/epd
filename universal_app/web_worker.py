@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT))
 from data_sources import Catalogs, clean, normalize_name, read_counteragents, read_xlsx, value
 from server_generator import Generator
 from manual_corrections import prepare_manual_fields
+from container_types import container_iso_from_ttn
 
 
 def load_catalogs():
@@ -191,8 +192,17 @@ def handle(request):
             context = generator.context({**cargo, **(auto or {}), "_container":container_number}, date.fromisoformat(request.get("date") or date.today().isoformat()), user, None)
             context["order_number"] = clean(request.get("orderNumber")) or context["order_number"]
             context["services"] = services
+            context["cargo_route"] = clean(value(auto, "Маршрут"))
+            unloading = value(auto, "Плановая дата прибытия", "Последняя план дата прибытия", "ETA (план дата прибытия)")
+            context["forwarding_delivery_datetime"] = context["planned_arrival_datetime"] if clean(unloading) else None
+            # For workspace orders Taglex is the customer and provides the container.
+            # In the separate client-to-Taglex flow Taglex is the forwarder.
+            context["container_provider"] = "1" if request.get("direction") == "taglex_to_carrier" else "2"
+            if context["container_provider"] == "1":
+                context["container_iso"] = container_iso_from_ttn(auto or {}, container_number)
+                context["container_tare"] = "2200" if context["container_iso"].startswith("20") else "3700"
             contexts.append(context)
-        return {"userDataXml":generator.forwarding_order_userdata(contexts, clean(request.get("signer")))}
+        return {"userDataXml":generator.forwarding_order_userdata(contexts, clean(request.get("signer")), request.get("direction") or "client_to_taglex")}
     container = request["container"]
     cargo, auto = cargo_index.get(container), auto_index.get(container)
     if not cargo and auto:
@@ -219,7 +229,7 @@ def handle(request):
     if request.get("action") == "forwarding_preview":
         return {"client":ctx["client"],"clientEdo":ctx["client_edo"],"consignee":ctx["consignee"],"loading":ctx["loading"],"delivery":ctx["delivery"],"contract":ctx.get("client_contract"),"number":ctx["order_number"],"date":ctx["order_date"],"weight":ctx["weight"]}
     if request.get("action") == "forwarding_userdata":
-        return {"userDataXml":generator.forwarding_order_userdata(ctx, clean(request.get("signer")))}
+        return {"userDataXml":generator.forwarding_order_userdata(ctx, clean(request.get("signer")), request.get("direction") or "client_to_taglex")}
     ctx["gar_addresses"] = request.get("garAddresses") or {}
     kind = request["kind"]
     editable_fields, applied_corrections = prepare_manual_fields(ctx, kind, request.get("savedCorrections"), request.get("manualValues"))

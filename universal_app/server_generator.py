@@ -90,7 +90,7 @@ class Generator(BaseGenerator):
         return super().ezz(ctx)
 
     @staticmethod
-    def forwarding_order_userdata(contexts, signer_name):
+    def forwarding_order_userdata(contexts, signer_name, direction="client_to_taglex"):
         if isinstance(contexts, dict):
             contexts = [contexts]
         ctx = contexts[0]
@@ -122,26 +122,42 @@ class Generator(BaseGenerator):
         parts = signer_name.split()
         if len(parts) < 2:
             raise ValueError("укажите фамилию и имя подписанта клиента")
-        contract = ctx.get("client_contract")
+        carrier_forwarder = direction == "taglex_to_carrier"
+        client = TAGLEX if carrier_forwarder else ctx["client"]
+        client_edo = TAGLEX["edo"] if carrier_forwarder else ctx.get("client_edo")
+        forwarder = ctx["carrier"] if carrier_forwarder else TAGLEX
+        forwarder_edo = ctx.get("carrier_edo") if carrier_forwarder else TAGLEX["edo"]
+        contract = ctx.get("carrier_contract") if carrier_forwarder else ctx.get("client_contract")
         if not contract:
-            raise ValueError("для клиента не найден договор транспортной экспедиции")
-        if not ctx["client"].get("inn") or not ctx.get("client_edo"):
+            raise ValueError("для экспедитора не найден договор транспортной экспедиции" if carrier_forwarder else "для клиента не найден договор транспортной экспедиции")
+        if not client.get("inn") or not client_edo:
             raise ValueError("для клиента не заполнены ИНН или ID ЭДО")
+        if carrier_forwarder and (not forwarder.get("inn") or not forwarder_edo):
+            raise ValueError("для перевозчика-экспедитора не заполнены ИНН или ID ЭДО")
         root = ET.Element("LogisticsForwardingOrderClientTitle", {
             "ForwardingOrderId":str(uuid.uuid4()), "Number":ctx["order_number"], "Date":ctx["order_date"], "HasCargoDocs":"0",
         })
         order = ET.SubElement(root, "ClientForwarderOrder")
         cargo_infos = ET.SubElement(order, "CargoInfos")
         for cargo_index, cargo_ctx in enumerate(contexts, start=1):
+            delivery_datetime = cargo_ctx.get("forwarding_delivery_datetime")
+            delivery_time = delivery_datetime.strftime("%H:%M") if delivery_datetime else ""
             cargo = ET.SubElement(cargo_infos, "CargoInfo", {
                 "ReadyFromDate":cargo_ctx["planned_departure_datetime"].strftime("%d.%m.%Y"),
                 "ReadyToDate":cargo_ctx["planned_departure_datetime"].strftime("%d.%m.%Y"),
+                **({"DeliveryFromDate":delivery_datetime.strftime("%d.%m.%Y"),
+                    "DeliveryToDate":delivery_datetime.strftime("%d.%m.%Y"),
+                    "DeliveryTime":f"{delivery_time}-{delivery_time}+03:00"} if delivery_datetime else {}),
                 "TransportationIndicator":"1", "CargoBatchId":str(uuid.uuid4()), "ShipmentCargoSpaceQuantity":"1", "NotifyReq":"0",
+                **({"CargoRoute":str(cargo_ctx["cargo_route"])[:1000]} if cargo_ctx.get("cargo_route") else {}),
+                **({"AcceptReq":"1"} if carrier_forwarder else {}),
             })
             org(ET.SubElement(cargo,"Consignee"),cargo_ctx["consignee"],cargo_ctx.get("consignee_edo",""))
-            shipper = cargo_ctx.get("order_shipper") or (cargo_ctx.get("loading_owner") if (cargo_ctx.get("loading_owner") or {}).get("inn") else cargo_ctx["client"])
+            shipper = TAGLEX if carrier_forwarder else cargo_ctx.get("order_shipper") or (cargo_ctx.get("loading_owner") if (cargo_ctx.get("loading_owner") or {}).get("inn") else cargo_ctx["client"])
             org(ET.SubElement(cargo,"Shipper"),shipper)
             ET.SubElement(ET.SubElement(cargo,"TransportInfos"),"TransportInfo",{"TransportType":"1","BodyType":"Контейнеровоз"})
+            directives=ET.SubElement(cargo,"ClientDirectives",{"TransportationDirectives":"нет","SpecialInformation":"нет"})
+            ET.SubElement(directives,"ClimateTransportRegime")
             weight = cargo_ctx.get("weight") or "0"
             ET.SubElement(cargo,"BatchWeight",{"NetWeight":weight,"GrossWeight":weight})
             descriptions=ET.SubElement(cargo,"ItemDescriptions")
@@ -153,7 +169,24 @@ class Generator(BaseGenerator):
             ET.SubElement(item,"CargoWeight",{"NetWeight":weight,"GrossWeight":weight})
             containers=ET.SubElement(cargo,"TransportContainers")
             seals=[seal for seal in cargo_ctx.get("seal_numbers",[]) if re.fullmatch(r"\d{1,10}",str(seal))]
-            container=ET.SubElement(containers,"TransportContainer",{"ContainerOrderNumber":str(cargo_index),"IsContainerProvided":"1","TotalGrossWeight":weight,**({"SealCount":str(len(seals))} if seals else {})})
+            container_attrs={"ContainerOrderNumber":str(cargo_index),"TotalGrossWeight":weight,**({"SealCount":str(len(seals))} if seals else {})}
+            iso_container=str(cargo_ctx.get("container_iso") or "").strip().upper()
+            if iso_container:
+                if not re.fullmatch(r"(?:20|40)[A-Z]{2}",iso_container):
+                    raise ValueError(f"некорректный ISO-тип контейнера {cargo_ctx['container']}: {iso_container}")
+                container_attrs["ISOContainer"]=iso_container
+            provider=str(cargo_ctx.get("container_provider") or "").strip()
+            tare=str(cargo_ctx.get("container_tare") or "").strip().replace(",", ".")
+            if provider not in {"1", "2"}:
+                raise ValueError(f"для контейнера {cargo_ctx['container']} выберите, кто предоставил контейнер: заказчик или экспедитор")
+            if provider == "1" and not tare:
+                raise ValueError(f"для контейнера {cargo_ctx['container']} укажите массу тары: она обязательна, если контейнер предоставил заказчик")
+            container_attrs["IsContainerProvided"]=provider
+            if tare:
+                if not re.fullmatch(r"\d+(?:\.\d+)?",tare):
+                    raise ValueError(f"некорректная масса тары контейнера {cargo_ctx['container']}")
+                container_attrs["ContainerTareWeight"]=tare
+            container=ET.SubElement(containers,"TransportContainer",container_attrs)
             if seals:
                 seal_numbers=ET.SubElement(container,"SealNumbers")
                 for seal in seals:
@@ -170,13 +203,13 @@ class Generator(BaseGenerator):
             address=ET.Element("Address")
             if russian_address(address,cargo_ctx["delivery"]) or russian_address(address,cargo_ctx["consignee"].get("address")):
                 wrapper=ET.SubElement(cargo,"DestinationAddress",{"CargoDeliveryPoint":"1"}); delivery=ET.SubElement(wrapper,"CargoDeliveryAddress"); delivery.append(address)
-        org(ET.SubElement(order,"ClientInfo"),ctx["client"],ctx["client_edo"])
-        org(ET.SubElement(order,"ForwarderInfo"),TAGLEX,TAGLEX["edo"],True)
+        org(ET.SubElement(order,"ClientInfo"),client,client_edo,carrier_forwarder)
+        org(ET.SubElement(order,"ForwarderInfo"),forwarder,forwarder_edo,not carrier_forwarder)
         contract_date = str(contract.get("date") or "").split("T")[0].split(" ")[0]
         if len(contract_date) == 10 and contract_date[4] == "-":
             contract_date = f"{contract_date[8:10]}.{contract_date[5:7]}.{contract_date[:4]}"
         contract_node=ET.SubElement(order,"ForwardingContractRequisites",{"DocumentName":contract.get("title") or "Договор транспортной экспедиции","DocumentNumber":contract.get("number") or "","DocumentDate":contract_date})
-        ET.SubElement(contract_node,"IdentificationDetails",{"Inn":TAGLEX["inn"]})
+        ET.SubElement(contract_node,"IdentificationDetails",{"Inn":forwarder["inn"]})
         signers=ET.SubElement(root,"Signers"); signer=ET.SubElement(signers,"Signer",{"SignerPowersConfirmationMethod":"1"})
         ET.SubElement(signer,"Fio",{"LastName":parts[0],"FirstName":parts[1],**({"MiddleName":" ".join(parts[2:])} if len(parts)>2 else {})})
         def xml_safe(value):
