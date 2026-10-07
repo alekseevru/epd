@@ -555,6 +555,23 @@ class AddressRegressions(unittest.TestCase):
         self.assertEqual(root.find(".//TransportContainer").get("ContainerTareWeight"), "3700")
         self.assertEqual([item.get("ServiceName") for item in root.findall(".//LogisticsServiceInfo")], ["Организация автодоставки", "Перетарка"])
 
+    def test_forwarding_order_uses_preferred_carrier_edo_id(self):
+        catalogs = Catalogs()
+        carrier = {"name": 'ООО "РУСКОМ"', "inn": "2315161125", "kpp": "231501001"}
+        catalogs.edo = [
+            {"ИНН": carrier["inn"], "КПП": carrier["kpp"], "Идентификатор участника ЭДО": "2AE-first"},
+            {"ИНН": carrier["inn"], "КПП": carrier["kpp"], "Идентификатор участника ЭДО": "2AE-selected"},
+        ]
+        self.assertEqual(catalogs.preferred_edo_id(carrier, {}), "")
+        selected = catalogs.preferred_edo_id(carrier, {
+            "2315161125|231501001": {"participantId": "2AE-selected"}
+        })
+        self.assertEqual(selected, "2AE-selected")
+        with self.assertRaisesRegex(ValueError, "больше не найден"):
+            catalogs.preferred_edo_id(carrier, {
+                "2315161125|231501001": {"participantId": "2AE-outdated"}
+            })
+
     def test_forwarding_route_prefers_dedicated_tms_fields(self):
         generator = ServerGenerator(Path(__file__).parent / "resources", Catalogs())
         context = generator.context({

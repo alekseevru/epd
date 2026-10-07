@@ -164,6 +164,18 @@ class Catalogs:
                 return unique_ids[0]
         return ""
 
+    def preferred_edo_id(self, company: dict | None, preferences: dict | None) -> str:
+        if not company:
+            return ""
+        inn, kpp = clean(company.get("ИНН") or company.get("inn")), clean(company.get("КПП") or company.get("kpp"))
+        preference = (preferences or {}).get(f"{inn}|{kpp}") or {}
+        participant_id = clean(preference.get("participantId"))
+        if participant_id:
+            if participant_id not in {option["id"] for option in self.edo_options(company)}:
+                raise ValueError(f"Закреплённый ID ЭДО для ИНН {inn} больше не найден в справочнике. Выберите ID заново.")
+            return participant_id
+        return self.edo_id(company)
+
     def kpp_for_edo(self, inn: str, participant_id: str) -> str:
         if not clean(inn) or not clean(participant_id):
             return ''

@@ -190,6 +190,15 @@ def handle(request):
             if not cargo:
                 raise ValueError(f"контейнер {container_number} не найден в реестре грузов")
             context = generator.context({**cargo, **(auto or {}), "_container":container_number}, date.fromisoformat(request.get("date") or date.today().isoformat()), user, None)
+            if request.get("direction") == "taglex_to_carrier":
+                context["carrier_edo"] = catalogs.preferred_edo_id(
+                    context["carrier"], request.get("edoPreferences")
+                )
+                if not context["carrier_edo"] and context["carrier"].get("inn"):
+                    options = catalogs.edo_options(context["carrier"])
+                    detail = "найдено несколько ID ЭДО" if options else "не найден ID ЭДО в справочнике"
+                    raise ValueError(f"Для перевозчика {context['carrier']['name']} {detail}. "
+                                     "Выберите и закрепите нужный ID в карточке перевозки.")
             context["order_number"] = clean(request.get("orderNumber")) or context["order_number"]
             context["services"] = services
             context["cargo_route"] = clean(value(auto, "Маршрут"))
@@ -229,6 +238,8 @@ def handle(request):
     if request.get("action") == "forwarding_preview":
         return {"client":ctx["client"],"clientEdo":ctx["client_edo"],"consignee":ctx["consignee"],"loading":ctx["loading"],"delivery":ctx["delivery"],"contract":ctx.get("client_contract"),"number":ctx["order_number"],"date":ctx["order_date"],"weight":ctx["weight"]}
     if request.get("action") == "forwarding_userdata":
+        if request.get("direction") == "taglex_to_carrier":
+            ctx["carrier_edo"] = catalogs.preferred_edo_id(ctx["carrier"], request.get("edoPreferences"))
         return {"userDataXml":generator.forwarding_order_userdata(ctx, clean(request.get("signer")), request.get("direction") or "client_to_taglex")}
     ctx["gar_addresses"] = request.get("garAddresses") or {}
     kind = request["kind"]
