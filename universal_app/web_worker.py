@@ -44,6 +44,7 @@ cache_dir = ROOT.parent / "web_app" / "work" / "source-cache"
 source_stamp = None
 catalog_stamp = None
 cargo_rows, cargo_index, auto_index = [], {}, {}
+cargo_records, auto_records = {}, {}
 
 
 def current_catalog_stamp():
@@ -76,7 +77,7 @@ def refresh_catalogs():
 
 
 def refresh_sources():
-    global source_stamp, cargo_rows, cargo_index, auto_index
+    global source_stamp, cargo_rows, cargo_index, auto_index, cargo_records, auto_records
     cargo_file, auto_file = cache_dir / "cargo.xlsx", cache_dir / "auto.xlsx"
     cargo_json, auto_json = cargo_file.with_suffix(".json"), auto_file.with_suffix(".json")
     cargo_source = cargo_json if cargo_json.exists() else cargo_file
@@ -89,15 +90,18 @@ def refresh_sources():
                 return json.load(stream)
         return read_xlsx(xlsx_path, sheet)
     cargo_rows = read_source(cargo_source, cargo_file, "OPERATION_UNIT")
-    cargo_index = {}
+    cargo_index, cargo_records = {}, {}
     for row in cargo_rows:
         for cell in row.values():
             text = clean(cell)
             if len(text) >= 11:
                 import re
                 match = re.search(r"[A-ZА-Я]{4}\d{7}", text.upper())
-                if match: cargo_index[match.group()] = row; break
-    auto_index = {}
+                if match:
+                    cargo_records.setdefault(match.group(), []).append(row)
+                    cargo_index[match.group()] = row
+                    break
+    auto_index, auto_records = {}, {}
     supplemental_fields = (
         "Водитель", "ФИО водителя", "Телефон водителя",
         "Номер автомашины", "Транспортное средство", "Номер прицепа", "Грузополучатель",
@@ -114,24 +118,52 @@ def refresh_sources():
         ))
     for row in read_source(auto_source, auto_file, "OPERATION_SUB_DOC"):
         import re
-        match = re.search(r"[A-ZА-Я]{4}\d{7}", clean(row.get("Номера грузовых единиц")).upper())
-        if not match:
+        containers = list(dict.fromkeys(re.findall(r"[A-ZА-Я]{4}\d{7}", clean(row.get("Номера грузовых единиц")).upper())))
+        if not containers:
             continue
-        container = match.group()
-        if container not in auto_index:
-            # TMS exports rows by ID descending: keep the newest operation.
-            auto_index[container] = dict(row)
-            continue
-        selected = auto_index[container]
-        expected_carrier = clean(value(cargo_index.get(container) or {}, "Перевозчик", "Исполнитель"))
-        if operation_score(row, expected_carrier) > operation_score(selected, expected_carrier):
-            selected, row = dict(row), selected
-            auto_index[container] = selected
-        if normalize_name(value(selected, "Исполнитель", "Перевозчик")) == normalize_name(value(row, "Исполнитель", "Перевозчик")):
-            for field in supplemental_fields:
-                if not clean(selected.get(field)) and clean(row.get(field)):
-                    selected[field] = row[field]
+        for container in containers:
+            auto_records.setdefault(container, []).append(dict(row))
+            if container not in auto_index:
+                auto_index[container] = dict(row)
+                continue
+            selected = auto_index[container]
+            candidate = row
+            expected_carrier = clean(value(cargo_index.get(container) or {}, "Перевозчик", "Исполнитель"))
+            if operation_score(candidate, expected_carrier) > operation_score(selected, expected_carrier):
+                selected, candidate = dict(candidate), selected
+                auto_index[container] = selected
+            if normalize_name(value(selected, "Исполнитель", "Перевозчик")) == normalize_name(value(candidate, "Исполнитель", "Перевозчик")):
+                for field in supplemental_fields:
+                    if not clean(selected.get(field)) and clean(candidate.get(field)):
+                        selected[field] = candidate[field]
     source_stamp = stamp
+
+
+def records_for(container):
+    autos = auto_records.get(container) or ([auto_index[container]] if container in auto_index else [])
+    selected = auto_index.get(container)
+    ordered = ([selected] if selected else []) + [row for row in autos if str(row.get("Номер записи")) != str((selected or {}).get("Номер записи"))]
+    cargos = cargo_records.get(container) or ([cargo_index[container]] if container in cargo_index else [])
+    used = set()
+    for auto in ordered or [None]:
+        carrier = normalize_name(value(auto or {}, "Исполнитель", "Перевозчик"))
+        matching = [(index, row) for index, row in enumerate(cargos) if index not in used and carrier and normalize_name(value(row, "Перевозчик", "Исполнитель")) == carrier]
+        remaining = [(index, row) for index, row in enumerate(cargos) if index not in used]
+        selected_cargo = (matching or remaining or list(enumerate(cargos)))[:1]
+        if selected_cargo:
+            used.add(selected_cargo[0][0])
+        cargo = selected_cargo[0][1] if selected_cargo else None
+        record_id = str((auto or {}).get("Номер записи") or (cargo or {}).get("Номер записи") or container)
+        yield record_id, cargo, auto
+
+
+def selected_record(container, record_id=""):
+    if record_id:
+        for candidate_id, cargo, auto in records_for(container):
+            if candidate_id == str(record_id):
+                return cargo, auto
+        raise ValueError(f"Запись ТТН/CMR {record_id} для контейнера {container} не найдена")
+    return cargo_index.get(container), auto_index.get(container)
 
 
 def handle(request):
@@ -142,29 +174,32 @@ def handle(request):
         containers = list(dict.fromkeys(clean(item).upper() for item in request.get("containers", []) if clean(item)))[:100]
         items = []
         for container_number in containers:
-            cargo, auto = cargo_index.get(container_number), auto_index.get(container_number)
-            resolved_cargo = dict(cargo) if cargo else (dict(auto) if auto else None)
-            resolved_auto = dict(auto) if auto else None
-            if resolved_cargo and resolved_auto:
-                try:
-                    context = generator.context({**resolved_cargo, **resolved_auto, "_container":container_number}, date.today(), clean(request.get("user")) or "Пользователь", None)
-                    if context.get("loading"):
-                        resolved_auto["Адрес места отправления"] = context["loading"]
-                except Exception:
-                    pass
-            items.append({"container":container_number, "cargo":resolved_cargo, "auto":resolved_auto, "missingCargo":not resolved_cargo, "missingAuto":not auto, "cargoSource":"cargo" if cargo else ("auto" if auto else "missing")})
+            records = list(records_for(container_number))
+            if not records:
+                records = [(container_number, None, None)]
+            for record_id, cargo, auto in records:
+                resolved_cargo = dict(cargo) if cargo else (dict(auto) if auto else None)
+                resolved_auto = dict(auto) if auto else None
+                if resolved_cargo and resolved_auto:
+                    try:
+                        context = generator.context({**resolved_cargo, **resolved_auto, "_container":container_number}, date.today(), clean(request.get("user")) or "Пользователь", None)
+                        if context.get("loading"):
+                            resolved_auto["Адрес места отправления"] = context["loading"]
+                    except Exception:
+                        pass
+                items.append({"container":container_number, "recordId":record_id, "recordCount":len(records), "cargo":resolved_cargo, "auto":resolved_auto, "missingCargo":not resolved_cargo, "missingAuto":not auto, "cargoSource":"cargo" if cargo else ("auto" if auto else "missing")})
         return {"items":items}
     if action == "search_orders":
         needle = clean(request.get("query")).casefold()
         limit = min(max(int(request.get("limit") or 20), 1), 100)
-        container_by_row = {id(row):key for key, row in cargo_index.items()}
+        container_by_row = {id(row):key for key, rows in cargo_records.items() for row in rows}
         grouped = {}
         for cargo in cargo_rows:
             order_number = clean(value(cargo, "Номер заказа"))
             container_number = container_by_row.get(id(cargo), "")
             if not order_number or not container_number:
                 continue
-            auto = auto_index.get(container_number) or {}
+            auto = next((auto for _, matched_cargo, auto in records_for(container_number) if matched_cargo is cargo), None) or auto_index.get(container_number) or {}
             pickup = clean(value(auto, "Место забора груза (Маршрут)"))
             delivery = clean(value(auto, "Место доставки груза (Маршрут)"))
             route = " → ".join(filter(None, (pickup, delivery))) or clean(value(auto, "Маршрут"))
@@ -186,7 +221,7 @@ def handle(request):
         user = clean(request.get("user"))
         contexts = []
         for container_number in containers:
-            cargo, auto = cargo_index.get(container_number), auto_index.get(container_number)
+            cargo, auto = selected_record(container_number, request.get("recordId") if len(containers) == 1 else "")
             if not cargo:
                 raise ValueError(f"контейнер {container_number} не найден в реестре грузов")
             context = generator.context({**cargo, **(auto or {}), "_container":container_number}, date.fromisoformat(request.get("date") or date.today().isoformat()), user, None)
@@ -213,7 +248,7 @@ def handle(request):
             contexts.append(context)
         return {"userDataXml":generator.forwarding_order_userdata(contexts, clean(request.get("signer")), request.get("direction") or "client_to_taglex")}
     container = request["container"]
-    cargo, auto = cargo_index.get(container), auto_index.get(container)
+    cargo, auto = selected_record(container, request.get("recordId"))
     if not cargo and auto:
         cargo = dict(auto)
     if not cargo or not auto: raise ValueError("Контейнер не найден в обоих локальных реестрах")
