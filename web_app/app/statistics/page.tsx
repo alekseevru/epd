@@ -26,14 +26,14 @@ export default function Statistics(){
   const [items,setItems]=useState<Item[]>([]);
   const [tmsTrips,setTmsTrips]=useState<TmsTrip[]>([]);
   const [loading,setLoading]=useState(true),[error,setError]=useState("");
+  const [refreshKey,setRefreshKey]=useState(0);
   const [exporting,setExporting]=useState(false);
   const [month,setMonth]=useState(currentMonth),[expanded,setExpanded]=useState<string|null>(null);
   const [rankingMode,setRankingMode]=useState<"best"|"worst">("best"),[audience,setAudience]=useState<Audience>("carrier");
   const [backlogMode,setBacklogMode]=useState<BacklogMode>("carrier");
-  const load=()=>{setLoading(true);setError("");void fetch("/api/kontur/statistics",{cache:"no-store"}).then(async response=>{const result=await response.json();if(!response.ok)throw new Error(result.error||"Не удалось загрузить статистику");setItems(result.items||[]);setTmsTrips(result.tmsTrips||[]);}).catch(value=>setError(value instanceof Error?value.message:"Ошибка загрузки")).finally(()=>setLoading(false));};
-  useEffect(load,[]);
+  useEffect(()=>{let active=true;setLoading(true);setError("");void fetch(`/api/kontur/statistics?month=${encodeURIComponent(month)}${refreshKey?"&refresh=1":""}`,{cache:"no-store"}).then(async response=>{const result=await response.json();if(!response.ok)throw new Error(result.error||"Не удалось загрузить статистику");if(active){setItems(result.items||[]);setTmsTrips(result.tmsTrips||[]);}}).catch(value=>{if(active){setItems([]);setTmsTrips([]);setError(value instanceof Error?value.message:"Ошибка загрузки");}}).finally(()=>{if(active)setLoading(false);});return()=>{active=false;};},[month,refreshKey]);
 
-  const months=useMemo(()=>[...new Set([...items.map(item=>item.month),...tmsTrips.map(trip=>trip.month)].filter(value=>/^\d{4}-\d{2}$/.test(value)))].sort((a,b)=>b.localeCompare(a)),[items,tmsTrips]);
+  const months=useMemo(()=>{const values:string[]=[];const [year,number]=currentMonth().split("-").map(Number);for(let cursor=new Date(year,number-1,1);cursor>=new Date(2026,8,1);cursor.setMonth(cursor.getMonth()-1))values.push(`${cursor.getFullYear()}-${String(cursor.getMonth()+1).padStart(2,"0")}`);return values;},[]);
   const selected=useMemo(()=>items.filter(item=>item.month===month&&(audience!=="consignee"||(item.title1or2Signed&&!isTaglex(item.consignee)))),[items,month,audience]);
   const signedFlag=(item:Item)=>audience==="consignee"?item.consigneeTitle3Signed:item.carrierTitle2Signed;
   const totals=useMemo(()=>{const signed=selected.filter(signedFlag).length;return {total:selected.length,signed,unsigned:selected.length-signed};},[selected,audience]);
@@ -74,10 +74,11 @@ export default function Statistics(){
   return <main className={styles.shell}>
     <header className={styles.topbar}><div style={{background:"transparent"}}><img src="/agr-logo.png" alt="Логотип АГР" width={40} height={40} style={{display:"block",objectFit:"contain"}}/></div><strong>Создание ЭПД <small>версия {appPackage.version}</small></strong><nav><a href="/workspace">Создание документов</a><a href="/forwarding-orders">Поручения клиентам</a><a href="/control">Контроль подписания</a><a className={styles.active} href="/statistics">Статистика</a><a href="/edo-settings">Настройки ID ЭДО</a></nav></header>
     <section className={styles.content}>
-      <header className={styles.heading}><div><small>АНАЛИТИКА ЭТрН</small><h1>Статистика ЭТрН</h1><p>{audience==="carrier"?"Контроль подписания титула 2 перевозчиками.":audience==="consignee"?"Контроль подписания титула 3 грузополучателями после наступления даты доставки.":"Контроль рейсов TMS, для которых еще не выпущена ЭТрН."}</p></div><button onClick={load} disabled={loading}>{loading?"Считаем…":"Обновить"}</button></header>
+      <header className={styles.heading}><div><small>АНАЛИТИКА ЭТрН</small><h1>Статистика ЭТрН</h1><p>{audience==="carrier"?"Контроль подписания титула 2 перевозчиками.":audience==="consignee"?"Контроль подписания титула 3 грузополучателями после наступления даты доставки.":"Контроль рейсов TMS, для которых еще не выпущена ЭТрН."}</p></div><button onClick={()=>setRefreshKey(value=>value+1)} disabled={loading}>{loading?"Считаем…":"Обновить"}</button></header>
       {error&&<p className={styles.error}>{error}</p>}
       <section className={styles.audienceSwitch}><button className={audience==="carrier"?styles.on:""} onClick={()=>{setAudience("carrier");setExpanded(null)}}>Перевозчики · титул 2</button><button className={audience==="consignee"?styles.on:""} onClick={()=>{setAudience("consignee");setExpanded(null)}}>Грузополучатели · титул 3</button><button className={audience==="backlog"?styles.on:""} onClick={()=>{setAudience("backlog");setExpanded(null)}}>Backlog TMS</button></section>
-      <section className={styles.monthFilter}><label><span>Отчётный месяц</span><select value={month} onChange={event=>setMonth(event.target.value)}><option value={currentMonth()}>{monthName(currentMonth())}{months.includes(currentMonth())?"":" · нет данных"}</option>{months.filter(value=>value!==currentMonth()).map(value=><option value={value} key={value}>{monthName(value)}</option>)}</select></label></section>
+      <section className={styles.monthFilter}><label><span>Отчётный месяц</span><select value={month} onChange={event=>setMonth(event.target.value)}>{months.map(value=><option value={value} key={value}>{monthName(value)}</option>)}</select></label></section>
+      {!error&&!loading&&<>
       <section className={styles.metrics}>{(audience==="backlog"?[{name:"Фактические рейсы TMS",value:tripTotals.total},{name:"Рейсы с ЭТрН",value:tripTotals.withEtrn},{name:"Backlog без ЭТрН",value:tripTotals.total-tripTotals.withEtrn},{name:"Покрытие рейсов",value:tripTotals.total?`${Math.round(tripTotals.withEtrn/tripTotals.total*100)}%`:"0%"}]:[{name:"ЭТрН в контроле",value:totals.total},{name:`Подписано Т${titleNumber}`,value:totals.signed},{name:audience==="carrier"?"Не подписано Т2":"Отклонения · нет Т3",value:totals.unsigned}]).map(card=><article key={card.name}><span>{card.name}</span><strong>{card.value}</strong></article>)}</section>
       {audience!=="backlog"&&<section className={styles.charts}>
         <article className={`${styles.chartCard} ${styles.monthTotalCard}`}><header><div><small>ОБЪЁМ</small><h2>ЭТрН за {monthName(month)}</h2></div></header><div className={styles.singleBar}><strong>{totals.total}</strong><span><i style={{height:totals.total?"100%":"0"}}/></span><small>{monthName(month,true)}</small></div></article>
@@ -101,6 +102,7 @@ export default function Statistics(){
           {!loading&&!entities.length&&<tr><td colSpan={4} className={styles.empty}>За выбранный месяц данных нет</td></tr>}
         </tbody></table></div>}
       </section>
+      </>}
     </section>
   </main>;
 }
