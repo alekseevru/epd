@@ -7,7 +7,9 @@ test("reads more than 20 pages without dropping older documents",async()=>{
   const documents=await loadMonthlyDocuments("2026-09","2026-09",async ({fromDocumentDate,toDocumentDate,afterIndexKey})=>{
     calls.push({fromDocumentDate,toDocumentDate,afterIndexKey});
     const offset=afterIndexKey?Number(afterIndexKey):0;
-    return {TotalCount:2501,Documents:Array.from({length:Math.min(100,2501-offset)},(_,index)=>({IndexKey:String(offset+index+1)}))};
+    // В живом ответе Диадока TotalCount начинается с 1000 и затем уменьшается.
+    // Это не длина всей выборки и не признак окончания страниц.
+    return {TotalCount:Math.max(0,1000-offset),Documents:Array.from({length:Math.min(100,2501-offset)},(_,index)=>({IndexKey:String(offset+index+1)}))};
   });
   assert.equal(documents.length,2501);
   assert.equal(calls.length,26);
