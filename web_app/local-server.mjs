@@ -568,7 +568,17 @@ const server = http.createServer((request, response) => {
   if(request.method==="POST"&&url.pathname==="/api/forwarding-order"){
     let body="";request.setEncoding("utf8");request.on("data",chunk=>body+=chunk);request.on("end",()=>void(async()=>{try{
       const payload=JSON.parse(body);for(const key of ["orderNumber","user","signer"])if(!String(payload[key]||"").trim())throw new Error(`Не заполнено поле: ${key}`);if(!Array.isArray(payload.containers)||!payload.containers.length)throw new Error("В заказе нет контейнеров");
-      const generatedData=await sendGeneratorRequest({...payload,action:"forwarding_userdata_multi",date:payload.date||new Date().toISOString().slice(0,10),edoPreferences:loadEdoPreferences()});if(generatedData.error)throw new Error(generatedData.error);
+      const edoPreferences=loadEdoPreferences();
+      if(payload.direction==="taglex_to_carrier"){
+        for(const container of payload.containers){
+          const options=await sendGeneratorRequest({...payload,action:"edo_options",container,recordId:payload.containers.length===1?payload.recordId:""});
+          if(options.error)throw new Error(options.error);
+          let evidence=new Map();try{evidence=await loadSignedEdoEvidence(options.parties);}catch{}
+          const carrier=decorateEdoParties(options.parties,evidence).find(party=>party.role==="carrier");
+          if(carrier?.selectedId&&!edoPreferences[carrier.key])edoPreferences[carrier.key]={participantId:carrier.selectedId};
+        }
+      }
+      const generatedData=await sendGeneratorRequest({...payload,action:"forwarding_userdata_multi",date:payload.date||new Date().toISOString().slice(0,10),edoPreferences});if(generatedData.error)throw new Error(generatedData.error);
       const config=konturConfig();const accessToken=await getKonturAccessToken();const generateUrl=`${diadocApiUrl}/GenerateTitleXml?boxId=${encodeURIComponent(config.boxId)}&documentTypeNamedId=LogisticsForwardingOrder&documentFunction=default&documentVersion=kl_porek_wt3_05_02_01&titleIndex=0`;
       const generated=await fetch(generateUrl,{method:"POST",headers:{Authorization:`Bearer ${accessToken}`,"Content-Type":"application/xml; charset=utf-8"},body:generatedData.userDataXml,signal:AbortSignal.timeout(45_000)});const bytes=Buffer.from(await generated.arrayBuffer());if(!generated.ok)throw new Error(new TextDecoder().decode(bytes)||`Диадок вернул HTTP ${generated.status}`);
       const officialId=xmlAttribute(bytes.toString("utf8"),"ИдФайл");
