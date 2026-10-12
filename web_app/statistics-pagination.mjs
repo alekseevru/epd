@@ -13,14 +13,15 @@ export async function loadMonthlyDocuments(startMonth,endMonth,fetchPage){
     const month=cursor.toISOString().slice(0,7);
     const fromDocumentDate=diadocDate(cursor);
     const toDocumentDate=diadocDate(new Date(Date.UTC(cursor.getUTCFullYear(),cursor.getUTCMonth()+1,0)));
-    let afterIndexKey="",received=0,complete=false;
+    let afterIndexKey="",complete=false;
     for(let page=0;page<1000;page++){
       const result=await fetchPage({fromDocumentDate,toDocumentDate,afterIndexKey});
       if(!Array.isArray(result?.Documents))throw new Error(`Диадок не вернул список ЭТрН за ${month}`);
       const portion=result.Documents;
       documents.push(...portion);
-      received+=portion.length;
-      if(portion.length<100||result.TotalCount!=null&&Number.isFinite(Number(result.TotalCount))&&received>=Number(result.TotalCount)){
+      // Диадок может возвращать TotalCount для оставшейся части выборки,
+      // поэтому завершение подтверждает только неполная страница.
+      if(portion.length<100){
         complete=true;
         break;
       }
