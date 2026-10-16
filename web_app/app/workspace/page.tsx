@@ -353,7 +353,7 @@ export default function Workspace() {
       const response=await fetch("/api/forwarding-order",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({orderNumber:trip._recordId,containers:[trip._container],recordId:trip._recordId,transportMode,cargoName,services:forwardingServices[trip._key]||[],user:employee.trim(),signer:employee.trim(),direction:"taglex_to_carrier"})});
       const result=await response.json();
       if(!response.ok||result.error)throw new Error(result.error||"Не удалось сформировать поручение");
-      return result as {content:string;filename:string};
+      return result as {content:string;filename:string;recipientBoxId?:string};
     }
     const row = { ...(trip._cargo ?? {}), ...(trip._auto ?? {}) };
       const requestDocument = async (confirmWarnings = false,choice?:Exclude<WarningChoice,null>) => {
@@ -370,7 +370,7 @@ export default function Workspace() {
         ({response,result} = await requestDocument(true,choice));
       }
       if (!response.ok || result.error) throw new Error(result.error || "Не удалось сформировать документ");
-      return result as {content:string;filename:string};
+      return result as {content:string;filename:string;recipientBoxId?:string};
   };
 
   const generateDocument = async (trip: Trip, kind: DocumentKind, quiet = false) => {
@@ -415,7 +415,7 @@ export default function Workspace() {
 
       currentStep="draft"; updateStep("draft","working","Передаём XML и ожидаем проверку документа в Диадоке");
       setKonturTransfer(current=>({...current,summary:"Создаём черновик в Контур.Логистике"}));
-      const response=await fetchWithTimeout("/api/kontur/draft",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({kind,content:document.content,filename:document.filename})},15_000);
+      const response=await fetchWithTimeout("/api/kontur/draft",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({kind,content:document.content,filename:document.filename,recipientBoxId:document.recipientBoxId})},15_000);
       const queued=await response.json();
       if(!response.ok||queued.error||!queued.jobId) throw new Error(queued.error||"Сервер не вернул номер операции");
       let result:{state?:string;message?:string;messageId?:string;error?:string}={};
