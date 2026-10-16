@@ -731,7 +731,7 @@ class Generator:
             else:
                 instructions.attrib.pop("СвПломба", None)
         cargo = info.find("СвГруз/ОпГруз")
-        cargo.set("НаимГруз", f"Порожний контейнер {ctx['container']}" if empty else f"Контейнер {ctx['container']}")
+        cargo.set("НаимГруз", ctx["cargo_name"] if ctx.get("transport_mode") == "non_container" else f"Порожний контейнер {ctx['container']}" if empty else f"Контейнер {ctx['container']}")
         packaging_method, package_type = cargo_packaging(ctx.get("client"))
         cargo.set("СпУпак", packaging_method)
         cargo.set("ВидТар", package_type)
@@ -793,6 +793,10 @@ class Generator:
                 ET.SubElement(ET.SubElement(basis, "ИдРекСост"), taxpayer).text = ownership["owner_inn"]
         trailer = info.find("СвТС/Прицеп")
         trailer.set("РегНомер", ctx["trailer"] or "ОТСУТСТВУЕТ")
+        if ctx.get("transport_mode") == "non_container":
+            trailer_part = trailer.find("ПарТС")
+            if trailer_part is not None:
+                trailer_part.set("Тип", ctx.get("body_type") or "Тент")
         planned_departure = ctx["planned_departure_datetime"]
         actual_departure = ctx["actual_departure_datetime"]
         loading = info.find("СвПогруз")
@@ -888,8 +892,12 @@ class Generator:
                 "ИННВладИнфр": clean(loading_owner["inn"]),
             })
         cargo = info.find("ОпГруз")
-        cargo.set("НаимГруз", f"Контейнер {ctx['container']}")
+        cargo.set("НаимГруз", ctx["cargo_name"] if ctx.get("transport_mode") == "non_container" else f"Контейнер {ctx['container']}")
         cargo.find("МасГруз").set("МасБрутЗнач", ctx["weight"])
+        if ctx.get("transport_mode") == "non_container":
+            vehicle_part = info.find("ПарТСПрвз")
+            if vehicle_part is not None:
+                vehicle_part.set("Тип", ctx.get("body_type") or "Тент")
         signer = doc.find("ПодпИнфГО")
         signer.set("СпосПодтПолном", "1")
         signer.find("ФИО").attrib = _fio(ctx["user"])

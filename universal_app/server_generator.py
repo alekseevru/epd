@@ -17,6 +17,10 @@ class Generator(BaseGenerator):
     @staticmethod
     def _validate(ctx, empty=False, ezz=False):
         missing = []
+        if ctx.get("transport_mode") == "non_container" and not ctx.get("cargo_name"):
+            missing.append("наименование груза")
+        if empty and ctx.get("transport_mode") == "non_container":
+            raise ValueError("ЭТрН на порожний контейнер неприменима к перевозке без контейнера")
         if not ctx["carrier"]["inn"]:
             missing.append("перевозчик")
         if not ctx["carrier_edo"]:
@@ -159,43 +163,48 @@ class Generator(BaseGenerator):
             org(ET.SubElement(cargo,"Consignee"),cargo_ctx["consignee"],cargo_ctx.get("consignee_edo",""))
             shipper = TAGLEX if carrier_forwarder else cargo_ctx.get("order_shipper") or (cargo_ctx.get("loading_owner") if (cargo_ctx.get("loading_owner") or {}).get("inn") else cargo_ctx["client"])
             org(ET.SubElement(cargo,"Shipper"),shipper)
-            ET.SubElement(ET.SubElement(cargo,"TransportInfos"),"TransportInfo",{"TransportType":"1","BodyType":"Контейнеровоз"})
+            non_container = cargo_ctx.get("transport_mode") == "non_container"
+            if non_container and not cargo_ctx.get("cargo_name"):
+                raise ValueError("для перевозки без контейнера укажите наименование груза")
+            ET.SubElement(ET.SubElement(cargo,"TransportInfos"),"TransportInfo",{"TransportType":"1","BodyType":(cargo_ctx.get("body_type") or "Тент") if non_container else "Контейнеровоз"})
             directives=ET.SubElement(cargo,"ClientDirectives",{"TransportationDirectives":"нет","SpecialInformation":"нет"})
             ET.SubElement(directives,"ClimateTransportRegime")
             weight = cargo_ctx.get("weight") or "0"
             ET.SubElement(cargo,"BatchWeight",{"NetWeight":weight,"GrossWeight":weight})
             descriptions=ET.SubElement(cargo,"ItemDescriptions")
             item=ET.SubElement(descriptions,"ItemDescription",{"Name":cargo_ctx.get("cargo_name") or f"Контейнер {cargo_ctx['container']}","CargoSpaceQuantity":"1","HasDangerous":"0","HasRestrictedItems":"0","CanSpecifyVolume":"0","IsForStateSystemRegistration":"0","HasPackaging":"0","HasCommodityCode":"0"})
-            ET.SubElement(ET.SubElement(item,"Marks"),"Mark").text=cargo_ctx["container"]
+            if not non_container:
+                ET.SubElement(ET.SubElement(item,"Marks"),"Mark").text=cargo_ctx["container"]
             ET.SubElement(ET.SubElement(item,"CargoNumbers"),"CargoNumber").text=str(cargo_index)
             origin=ET.SubElement(item,"CargoOriginCountryInfo")
             ET.SubElement(origin,"Country").text="643"
             ET.SubElement(item,"CargoWeight",{"NetWeight":weight,"GrossWeight":weight})
-            containers=ET.SubElement(cargo,"TransportContainers")
-            seals=[seal for seal in cargo_ctx.get("seal_numbers",[]) if re.fullmatch(r"\d{1,10}",str(seal))]
-            container_attrs={"ContainerOrderNumber":str(cargo_index),"TotalGrossWeight":weight,**({"SealCount":str(len(seals))} if seals else {})}
-            iso_container=str(cargo_ctx.get("container_iso") or "").strip().upper()
-            if iso_container:
-                if not re.fullmatch(r"(?:20|40)[A-Z]{2}",iso_container):
-                    raise ValueError(f"некорректный ISO-тип контейнера {cargo_ctx['container']}: {iso_container}")
-                container_attrs["ISOContainer"]=iso_container
-            provider=str(cargo_ctx.get("container_provider") or "").strip()
-            tare=str(cargo_ctx.get("container_tare") or "").strip().replace(",", ".")
-            if provider not in {"1", "2"}:
-                raise ValueError(f"для контейнера {cargo_ctx['container']} выберите, кто предоставил контейнер: заказчик или экспедитор")
-            if provider == "1" and not tare:
-                raise ValueError(f"для контейнера {cargo_ctx['container']} укажите массу тары: она обязательна, если контейнер предоставил заказчик")
-            container_attrs["IsContainerProvided"]=provider
-            if tare:
-                if not re.fullmatch(r"\d+(?:\.\d+)?",tare):
-                    raise ValueError(f"некорректная масса тары контейнера {cargo_ctx['container']}")
-                container_attrs["ContainerTareWeight"]=tare
-            container=ET.SubElement(containers,"TransportContainer",container_attrs)
-            if seals:
-                seal_numbers=ET.SubElement(container,"SealNumbers")
-                for seal in seals:
-                    ET.SubElement(seal_numbers,"SealNumber").text=str(seal)
-            ET.SubElement(container,"IntContainerId").text=cargo_ctx["container"]
+            if not non_container:
+                containers=ET.SubElement(cargo,"TransportContainers")
+                seals=[seal for seal in cargo_ctx.get("seal_numbers",[]) if re.fullmatch(r"\d{1,10}",str(seal))]
+                container_attrs={"ContainerOrderNumber":str(cargo_index),"TotalGrossWeight":weight,**({"SealCount":str(len(seals))} if seals else {})}
+                iso_container=str(cargo_ctx.get("container_iso") or "").strip().upper()
+                if iso_container:
+                    if not re.fullmatch(r"(?:20|40)[A-Z]{2}",iso_container):
+                        raise ValueError(f"некорректный ISO-тип контейнера {cargo_ctx['container']}: {iso_container}")
+                    container_attrs["ISOContainer"]=iso_container
+                provider=str(cargo_ctx.get("container_provider") or "").strip()
+                tare=str(cargo_ctx.get("container_tare") or "").strip().replace(",", ".")
+                if provider not in {"1", "2"}:
+                    raise ValueError(f"для контейнера {cargo_ctx['container']} выберите, кто предоставил контейнер: заказчик или экспедитор")
+                if provider == "1" and not tare:
+                    raise ValueError(f"для контейнера {cargo_ctx['container']} укажите массу тары: она обязательна, если контейнер предоставил заказчик")
+                container_attrs["IsContainerProvided"]=provider
+                if tare:
+                    if not re.fullmatch(r"\d+(?:\.\d+)?",tare):
+                        raise ValueError(f"некорректная масса тары контейнера {cargo_ctx['container']}")
+                    container_attrs["ContainerTareWeight"]=tare
+                container=ET.SubElement(containers,"TransportContainer",container_attrs)
+                if seals:
+                    seal_numbers=ET.SubElement(container,"SealNumbers")
+                    for seal in seals:
+                        ET.SubElement(seal_numbers,"SealNumber").text=str(seal)
+                ET.SubElement(container,"IntContainerId").text=cargo_ctx["container"]
             address=ET.Element("Address")
             if russian_address(address,cargo_ctx["loading"]) or russian_address(address,shipper.get("address")):
                 wrapper=ET.SubElement(cargo,"CargoLocationAddress",{"CargoPickupLocation":"1"}); delivery=ET.SubElement(wrapper,"CargoDeliveryAddress"); delivery.append(address)
