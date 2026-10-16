@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { draftMessageToPost, savedDraftDocument } from "../kontur-draft.mjs";
-import { konturDocumentUrl, logisticsIdFromCustomData } from "../kontur-document-links.mjs";
+import { konturDocumentUrl, logisticsIdFromCustomData, verifiedForwardingUrl } from "../kontur-document-links.mjs";
 import { activeForwardingDrafts } from "../kontur-document-presence.mjs";
 
 test("forwarding draft includes recipient and enables strict validation", () => {
@@ -22,8 +22,12 @@ test("links use kl-id only for Logistics and Diadoc IDs otherwise", () => {
   const box="box";
   assert.equal(konturDocumentUrl(box,"message","entity","LogisticsForwardingOrder","kl-document"),"https://logist.kontur.ru/box/consignor/sign/forwardingOrder/kl-document");
   assert.equal(konturDocumentUrl(box,"message","entity","LogisticsForwardingOrder"),"https://diadoc.kontur.ru/box/Document/Show?letterId=message&documentId=entity");
+  assert.equal(konturDocumentUrl(box,"message","entity","LogisticsOrderRequest"),"https://diadoc.kontur.ru/box/Document/Show?letterId=message&documentId=entity");
   assert.equal(konturDocumentUrl(box,"message","entity","LogisticsForwardingOrder","","Draft"),null);
   assert.equal(logisticsIdFromCustomData([{Key:"kl-id",Value:"kl-document"}]),"kl-document");
+  const known="https://logist.kontur.ru/box/consignor/sign/forwardingOrder/150e2b6e-f56f-42cb-85d6-24db41c92a49";
+  assert.equal(verifiedForwardingUrl({CICU6864819:{url:known}},"CICU6864819","box"),known);
+  assert.equal(verifiedForwardingUrl({CICU6864819:{url:known}},"CICU6864819","other-box"),null);
 });
 
 test("unaddressed forwarding drafts do not count as available", () => {

@@ -16,3 +16,11 @@ export function konturDocumentUrl(boxId, messageId, entityId, typeNamedId, logis
 export function logisticsIdFromCustomData(customData) {
   return (customData || []).find(item => item.Key === "kl-id")?.Value || "";
 }
+
+export function verifiedForwardingUrl(links, container, boxId) {
+  const url = String(links?.[container]?.url || "");
+  const box = String(boxId || "").replace(/@diadoc\.ru$/i, "");
+  return /^https:\/\/logist\.kontur\.ru\//.test(url)
+    && new RegExp(`^https://logist\\.kontur\\.ru/${box}/consignor/sign/forwardingOrder/[0-9a-f-]{36}$`,"i").test(url)
+    ? url : null;
+}
