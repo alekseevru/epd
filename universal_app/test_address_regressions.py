@@ -6,11 +6,40 @@ from address_xml import known_gar, complete_gar
 from data_sources import Catalogs
 from server_generator import Generator as ServerGenerator
 from xml_generator import Generator, TAGLEX, address_attributes, _set_address, _set_contract, cargo_packaging, known_point_phone, normalize_vehicle_number, party, vehicle_ownership_details
-from container_types import container_iso_from_ttn, container_tare_from_ttn
+from container_types import container_iso_from_ttn, container_tare_from_ttn, transport_mode_from_ttn, body_type_from_ttn
 from manual_corrections import prepare_manual_fields
 
 
 class AddressRegressions(unittest.TestCase):
+    def test_transport_mode_follows_ttn_unit_types(self):
+        self.assertEqual(transport_mode_from_ttn({"Типы грузовых единиц": "1x40HC"}), "container")
+        self.assertEqual(transport_mode_from_ttn({"Типы грузовых единиц": "1xТент 120 м3"}), "non_container")
+        self.assertEqual(body_type_from_ttn({"Типы грузовых единиц": "1xТент 120 м3"}), "Тент")
+        self.assertIsNone(transport_mode_from_ttn({"Типы грузовых единиц": "1x40HC, 1xТент"}))
+
+    def test_non_container_documents_use_cargo_name_only(self):
+        catalogs = Catalogs()
+        generator = Generator(Path(__file__).parent / "resources", catalogs)
+        context = generator.context({"_container": "12345", "Клиент": "Тестовый клиент", "Исполнитель": "Тестовый перевозчик"}, date(2026, 10, 16), "Иванов Иван Иванович")
+        context.update(transport_mode="non_container", cargo_name="Стальные изделия", body_type="Тент")
+        for content in (generator.etrn(context)[1], generator.ezz(context)[1]):
+            root = ET.fromstring(content)
+            cargo = root.find(".//ОпГруз")
+            self.assertEqual(cargo.get("НаимГруз"), "Стальные изделия")
+            self.assertIsNone(cargo.find("СвКонтейн"))
+            self.assertNotIn("Контейнер", ET.tostring(root, encoding="unicode"))
+
+    def test_non_container_forwarding_order_omits_container_structure(self):
+        company = {"name": "Тест", "inn": "7700000000", "kpp": "770001001", "address": "г. Москва"}
+        context = {"planned_departure_datetime": date(2026, 10, 16), "transport_mode": "non_container", "body_type": "Тент", "container": "12345", "cargo_name": "Стальные изделия", "weight": "1000", "consignee": company, "loading": "г. Москва", "delivery": "г. Тверь", "client": company, "client_edo": "client-edo", "client_contract": {"title": "Договор", "number": "1", "date": "2026-10-01"}, "order_date": "16.10.2026", "order_number": "12345"}
+        xml = ServerGenerator.forwarding_order_userdata(context, "Иванов Иван Иванович")
+        root = ET.fromstring(xml)
+        self.assertEqual(root.find(".//TransportInfo").get("BodyType"), "Тент")
+        self.assertEqual(root.find(".//ItemDescription").get("Name"), "Стальные изделия")
+        self.assertIsNone(root.find(".//TransportContainer"))
+        self.assertIsNone(root.find(".//Marks"))
+        self.assertNotIn("Контейнер", xml)
+
     def test_missing_loading_point_owner_prompts_for_blank_manual_fields(self):
         catalogs = Catalogs()
         catalogs.points = [{

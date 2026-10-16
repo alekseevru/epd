@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import sys
 from datetime import date
 from pathlib import Path
@@ -12,7 +13,7 @@ sys.path.insert(0, str(ROOT))
 from data_sources import Catalogs, clean, normalize_name, read_counteragents, read_xlsx, value
 from server_generator import Generator
 from manual_corrections import prepare_manual_fields
-from container_types import container_iso_from_ttn
+from container_types import body_type_from_ttn, container_iso_from_ttn, transport_mode_from_ttn
 
 
 def load_catalogs():
@@ -45,6 +46,7 @@ source_stamp = None
 catalog_stamp = None
 cargo_rows, cargo_index, auto_index = [], {}, {}
 cargo_records, auto_records = {}, {}
+auto_by_id, auto_by_unit = {}, {}
 
 
 def current_catalog_stamp():
@@ -77,7 +79,7 @@ def refresh_catalogs():
 
 
 def refresh_sources():
-    global source_stamp, cargo_rows, cargo_index, auto_index, cargo_records, auto_records
+    global source_stamp, cargo_rows, cargo_index, auto_index, cargo_records, auto_records, auto_by_id, auto_by_unit
     cargo_file, auto_file = cache_dir / "cargo.xlsx", cache_dir / "auto.xlsx"
     cargo_json, auto_json = cargo_file.with_suffix(".json"), auto_file.with_suffix(".json")
     cargo_source = cargo_json if cargo_json.exists() else cargo_file
@@ -101,7 +103,7 @@ def refresh_sources():
                     cargo_records.setdefault(match.group(), []).append(row)
                     cargo_index[match.group()] = row
                     break
-    auto_index, auto_records = {}, {}
+    auto_index, auto_records, auto_by_id, auto_by_unit = {}, {}, {}, {}
     supplemental_fields = (
         "Водитель", "ФИО водителя", "Телефон водителя",
         "Номер автомашины", "Транспортное средство", "Номер прицепа", "Грузополучатель",
@@ -118,6 +120,12 @@ def refresh_sources():
         ))
     for row in read_source(auto_source, auto_file, "OPERATION_SUB_DOC"):
         import re
+        record_id = clean(row.get("Номер записи"))
+        if record_id:
+            auto_by_id[record_id] = dict(row)
+        raw_unit = clean(row.get("Номера грузовых единиц"))
+        if raw_unit:
+            auto_by_unit.setdefault(raw_unit.casefold(), []).append(dict(row))
         containers = list(dict.fromkeys(re.findall(r"[A-ZА-Я]{4}\d{7}", clean(row.get("Номера грузовых единиц")).upper())))
         if not containers:
             continue
@@ -140,6 +148,15 @@ def refresh_sources():
 
 
 def records_for(container):
+    if container in auto_by_id:
+        row = auto_by_id[container]
+        yield container, None, row
+        return
+    if container.casefold() in auto_by_unit and not re.fullmatch(r"[A-ZА-Я]{4}\d{7}", container, re.I):
+        rows = auto_by_unit[container.casefold()]
+        for row in rows:
+            yield clean(row.get("Номер записи")) or container, None, row
+        return
     autos = auto_records.get(container) or ([auto_index[container]] if container in auto_index else [])
     selected = auto_index.get(container)
     ordered = ([selected] if selected else []) + [row for row in autos if str(row.get("Номер записи")) != str((selected or {}).get("Номер записи"))]
@@ -166,6 +183,35 @@ def selected_record(container, record_id=""):
     return cargo_index.get(container), auto_index.get(container)
 
 
+def apply_transport_context(ctx, row, request, cargo_name="", require_cargo=True):
+    mode = clean(request.get("transportMode")) or transport_mode_from_ttn(row)
+    if not mode and not clean(row.get("Типы грузовых единиц")) and re.fullmatch(r"[A-ZА-Я]{4}\d{7}", ctx.get("container", ""), re.IGNORECASE):
+        mode = "container"
+    if mode not in {"container", "non_container"}:
+        if request.get("action") == "edo_options":
+            return ctx
+        raise ValueError("Тип перевозки не определён по ТТН/CMR. Выберите «Контейнер» или «Без контейнера» в карточке.")
+    ctx["transport_mode"] = mode
+    ctx["body_type"] = body_type_from_ttn(row)
+    if mode == "container":
+        unit_numbers = clean(row.get("Номера грузовых единиц"))
+        unit_match = re.search(r"[A-ZА-Я]{4}\d{7}", unit_numbers, re.I)
+        container_match = re.fullmatch(r"[A-ZА-Я]{4}\d{7}", clean(ctx.get("container")), re.I)
+        if not container_match and not unit_match:
+            raise ValueError("В ТТН/CMR не найден номер контейнера. Выберите «Тент / без контейнера» либо проверьте данные TMS.")
+        if not container_match and unit_match:
+            ctx["container"] = unit_match.group(0).upper()
+    if mode == "non_container":
+        ctx["cargo_name"] = clean(request.get("cargoName")) or clean(cargo_name)
+        if require_cargo and not ctx["cargo_name"]:
+            raise ValueError("Для перевозки без контейнера укажите наименование груза.")
+        record_id = clean(row.get("Номер записи"))
+        if record_id:
+            ctx["container"] = record_id
+            ctx["order_number"] = f"{ctx['date']:%Y%m%d}-{record_id}"
+    return ctx
+
+
 def handle(request):
     refresh_catalogs()
     refresh_sources()
@@ -187,7 +233,7 @@ def handle(request):
                             resolved_auto["Адрес места отправления"] = context["loading"]
                     except Exception:
                         pass
-                items.append({"container":container_number, "recordId":record_id, "recordCount":len(records), "cargo":resolved_cargo, "auto":resolved_auto, "missingCargo":not resolved_cargo, "missingAuto":not auto, "cargoSource":"cargo" if cargo else ("auto" if auto else "missing")})
+                items.append({"container":container_number, "recordId":record_id, "recordCount":len(records), "cargo":resolved_cargo, "auto":resolved_auto, "missingCargo":not resolved_cargo, "missingAuto":not auto, "cargoSource":"cargo" if cargo else ("auto" if auto else "missing"), "transportMode":transport_mode_from_ttn(resolved_auto or {})})
         return {"items":items}
     if action == "search_orders":
         needle = clean(request.get("query")).casefold()
@@ -222,9 +268,12 @@ def handle(request):
         contexts = []
         for container_number in containers:
             cargo, auto = selected_record(container_number, request.get("recordId") if len(containers) == 1 else "")
-            if not cargo:
-                raise ValueError(f"контейнер {container_number} не найден в реестре грузов")
+            if not cargo and auto:
+                cargo = dict(auto)
+            if not cargo or not auto:
+                raise ValueError(f"перевозка {container_number} не найдена в TMS")
             context = generator.context({**cargo, **(auto or {}), "_container":container_number}, date.fromisoformat(request.get("date") or date.today().isoformat()), user, None)
+            apply_transport_context(context, auto, request, value(cargo, "Наименование груза"))
             if request.get("direction") == "taglex_to_carrier":
                 context["carrier_edo"] = catalogs.preferred_edo_id(
                     context["carrier"], request.get("edoPreferences")
@@ -242,7 +291,7 @@ def handle(request):
             # For workspace orders Taglex is the customer and provides the container.
             # In the separate client-to-Taglex flow Taglex is the forwarder.
             context["container_provider"] = "1" if request.get("direction") == "taglex_to_carrier" else "2"
-            if context["container_provider"] == "1":
+            if context["container_provider"] == "1" and context["transport_mode"] == "container":
                 context["container_iso"] = container_iso_from_ttn(auto or {}, container_number)
                 context["container_tare"] = "2200" if context["container_iso"].startswith("20") else "3700"
             contexts.append(context)
@@ -262,6 +311,7 @@ def handle(request):
     if not user:
         raise ValueError("Не указан сотрудник, который формирует документ")
     ctx = generator.context(row, date.fromisoformat(request.get("date") or date.today().isoformat()), user, stock)
+    apply_transport_context(ctx, auto, request, value(cargo, "Наименование груза"), request.get("action") != "edo_options")
     ctx["stock_name"] = stock_name
     if request.get("action") == "edo_options":
         return {"parties": [

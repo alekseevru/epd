@@ -41,7 +41,8 @@ const openSourceDb = () => new Promise<IDBDatabase>((resolve,reject) => {
 const saveSourceFile=async(key:string,file:File)=>{const db=await openSourceDb();await new Promise<void>((resolve,reject)=>{const tx=db.transaction("files","readwrite");tx.objectStore("files").put(file,key);tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);});db.close();};
 const clearSourceFiles=async()=>{const db=await openSourceDb();await new Promise<void>((resolve,reject)=>{const tx=db.transaction("files","readwrite");tx.objectStore("files").clear();tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);});db.close();};
 type Source = { name: string; count: number; origin?: string; updatedAt?: string };
-type Trip = Row & { _container: string; _recordId: string; _recordCount: number; _key: string; _cargo?: Row; _auto?: Row; _missingCargo?: boolean; _missingAuto?: boolean };
+type TransportMode = "container" | "non_container";
+type Trip = Row & { _container: string; _recordId: string; _recordCount: number; _key: string; _cargo?: Row; _auto?: Row; _missingCargo?: boolean; _missingAuto?: boolean; _transportMode?: TransportMode | null };
 type DocumentKind = "cargo" | "order" | "empty" | "forwarding";
 const documentKinds: {kind:DocumentKind;title:string;icon:string}[] = [
   {kind:"cargo",title:"ЭТрН на груз",icon:"Г"},
@@ -49,6 +50,7 @@ const documentKinds: {kind:DocumentKind;title:string;icon:string}[] = [
   {kind:"empty",title:"ЭТрН на порожний",icon:"П"},
   {kind:"forwarding",title:"Поручение экспедитору",icon:"Э"},
 ];
+const transportModeOptions:{value:TransportMode;label:string}[]=[{value:"container",label:"Контейнер"},{value:"non_container",label:"Тент / без контейнера"}];
 const serviceOptions=["Организация автодоставки","Экспедирование","Перетарка"];
 
 const value = (row: Row | undefined, ...keys: string[]) => {
@@ -98,6 +100,8 @@ export default function Workspace() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Trip[]>([]);
   const [selectedDocs,setSelectedDocs]=useState<Record<string,DocumentKind>>({});
+  const [transportModes,setTransportModes]=useState<Record<string,TransportMode>>({});
+  const [cargoNames,setCargoNames]=useState<Record<string,string>>({});
   const [forwardingServices,setForwardingServices]=useState<Record<string,string[]>>({});
   const [manualServices,setManualServices]=useState<Record<string,string>>({});
   const [documentPresence,setDocumentPresence]=useState<Record<string,{checking:boolean;found?:Partial<Record<DocumentKind,boolean>>;links?:Partial<Record<DocumentKind,string>>;error?:string}>>({});
@@ -137,6 +141,8 @@ export default function Workspace() {
   const [warningValues,setWarningValues]=useState<Record<string,string>>({});
   const [rememberWarnings,setRememberWarnings]=useState(true);
   const [warningInputError,setWarningInputError]=useState("");
+  const modeForTrip=(trip:Trip):TransportMode|undefined=>transportModes[trip._key]||trip._transportMode||(!value(trip._auto,"Типы грузовых единиц")&&/^[A-Z]{4}\d{7}$/.test(trip._container)?"container":undefined);
+  const cargoNameForTrip=(trip:Trip)=>cargoNames[trip._key]??value(trip._cargo,"Наименование груза")??"";
   useEffect(()=>{void fetch("/api/employees",{cache:"no-store"}).then(async response=>{if(!response.ok)throw new Error("Не удалось загрузить сотрудников");const result=await response.json() as {employees:string[]};setEmployees(result.employees||[]);}).catch(()=>setMessage("Не удалось загрузить справочник сотрудников."));},[]);
   const saveEmployee=async()=>{
     const name=employee.trim().replace(/\s+/g," ");
@@ -295,7 +301,7 @@ export default function Workspace() {
 
   const loadEdoChoices=async(trips:Trip[])=>{
     setEdoChoices(current=>{const next={...current};for(const trip of trips)next[trip._key]={loading:true,parties:current[trip._key]?.parties||[]};return next;});
-    for(const trip of trips.filter(trip=>!trip._missingCargo&&!trip._missingAuto)){
+    for(const trip of trips.filter(trip=>!trip._missingAuto&&(!trip._missingCargo||trip._transportMode==="non_container"))){
       try{const response=await fetch("/api/edo-options",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({container:trip._container,recordId:trip._recordId,date:new Date().toISOString().slice(0,10),user:employee.trim()||"Пользователь"})});const result=await response.json();if(!response.ok)throw new Error(result.error||"Не удалось получить ID ЭДО");setEdoChoices(current=>({...current,[trip._key]:{loading:false,parties:result.parties}}));}catch(error){setEdoChoices(current=>({...current,[trip._key]:{loading:false,parties:[],error:error instanceof Error?error.message:"Ошибка ID ЭДО"}}));}
     }
   };
@@ -305,10 +311,10 @@ export default function Workspace() {
   };
   const search = async () => {
     if (!ready) return setMessage("Данные TMS ещё не загружены. Проверьте статус рядом с поиском контейнеров.");
-    const containers = Array.from(new Set(query.split(/[\s,;]+/).map(normalizeContainer).filter(Boolean)));
-    if (!containers.length) return setMessage("Вставьте номера контейнеров в формате ABCD1234567");
-    setBusy(true);setMessage("Ищем контейнеры в сохранённых данных TMS…");
-    try{const response=await fetch("/api/trips/search",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({containers,user:employee.trim()||"Пользователь"})});const result=await response.json();if(!response.ok)throw new Error(result.error||"Не удалось выполнить поиск");const found=(result.items||[]).map((item:{container:string;recordId:string;recordCount:number;cargo?:Row;auto?:Row;missingCargo:boolean;missingAuto:boolean})=>({...item.cargo,...item.auto,_container:item.container,_recordId:item.recordId,_recordCount:item.recordCount,_key:`${item.container}#${item.recordId}`,_cargo:item.cargo,_auto:item.auto,_missingCargo:item.missingCargo,_missingAuto:item.missingAuto} as Trip));setResults(found);void loadEdoChoices(found);void checkDocumentPresence([...new Set(found.map((item:Trip)=>item._container))]);setMessage('Найдено перевозок: '+found.filter((item:Trip)=>!item._missingCargo&&!item._missingAuto).length+' для '+containers.length+' контейнеров');}catch(error){setMessage(error instanceof Error?error.message:"Не удалось выполнить поиск");}finally{setBusy(false);}
+    const containers = Array.from(new Set(query.split(/[\n,;]+/).map(item=>normalizeContainer(item)||item.trim().toUpperCase()).filter(Boolean)));
+    if (!containers.length) return setMessage("Укажите номера контейнеров или номера записей ТТН/CMR");
+    setBusy(true);setMessage("Ищем перевозки в сохранённых данных TMS…");
+    try{const response=await fetch("/api/trips/search",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({containers,user:employee.trim()||"Пользователь"})});const result=await response.json();if(!response.ok)throw new Error(result.error||"Не удалось выполнить поиск");const found:Trip[]=(result.items||[]).map((item:{container:string;recordId:string;recordCount:number;cargo?:Row;auto?:Row;missingCargo:boolean;missingAuto:boolean;transportMode?:TransportMode|null})=>({...item.cargo,...item.auto,_container:item.container,_recordId:item.recordId,_recordCount:item.recordCount,_key:`${item.container}#${item.recordId}`,_cargo:item.cargo,_auto:item.auto,_missingCargo:item.missingCargo,_missingAuto:item.missingAuto,_transportMode:item.transportMode} as Trip));setResults(found);void loadEdoChoices(found);void checkDocumentPresence([...new Set<string>(found.filter(item=>item._transportMode!=="non_container"&&/^[A-Z]{4}\d{7}$/.test(item._container)).map(item=>item._container))]);setMessage('Найдено перевозок: '+found.filter(item=>!item._missingAuto&&(!item._missingCargo||item._transportMode==="non_container")).length+' для '+containers.length+' запросов');}catch(error){setMessage(error instanceof Error?error.message:"Не удалось выполнить поиск");}finally{setBusy(false);}
   };
 
   const checkDocumentPresence=async(containers:string[])=>{
@@ -338,15 +344,20 @@ export default function Workspace() {
   };
   const prepareDocument = async (trip: Trip, kind: DocumentKind) => {
     if (!employee.trim()) throw new Error("Укажите сотрудника, который формирует документ");
+    const transportMode=modeForTrip(trip);
+    if(!transportMode)throw new Error("Выберите тип перевозки в карточке TMS");
+    const cargoName=cargoNameForTrip(trip).trim();
+    if(transportMode==="non_container"&&!cargoName)throw new Error("Укажите наименование груза для перевозки без контейнера");
+    if(transportMode==="non_container"&&kind==="empty")throw new Error("Порожняя ЭТрН не применяется к перевозке без контейнера");
     if(kind==="forwarding"){
-      const response=await fetch("/api/forwarding-order",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({orderNumber:trip._container,containers:[trip._container],recordId:trip._recordId,services:forwardingServices[trip._key]||[],user:employee.trim(),signer:employee.trim(),direction:"taglex_to_carrier"})});
+      const response=await fetch("/api/forwarding-order",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({orderNumber:trip._recordId,containers:[trip._container],recordId:trip._recordId,transportMode,cargoName,services:forwardingServices[trip._key]||[],user:employee.trim(),signer:employee.trim(),direction:"taglex_to_carrier"})});
       const result=await response.json();
       if(!response.ok||result.error)throw new Error(result.error||"Не удалось сформировать поручение");
       return result as {content:string;filename:string};
     }
     const row = { ...(trip._cargo ?? {}), ...(trip._auto ?? {}) };
       const requestDocument = async (confirmWarnings = false,choice?:Exclude<WarningChoice,null>) => {
-        const response = await fetch("/api/generate", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({kind,container:trip._container,recordId:trip._recordId,row,date:new Date().toISOString().slice(0,10),user:employee.trim(),confirmWarnings,manualValues:choice?.manualValues,saveManualValues:choice?.saveManualValues}) });
+        const response = await fetch("/api/generate", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({kind,container:trip._container,recordId:trip._recordId,transportMode,cargoName,row,date:new Date().toISOString().slice(0,10),user:employee.trim(),confirmWarnings,manualValues:choice?.manualValues,saveManualValues:choice?.saveManualValues}) });
         return {response,result:await response.json()};
       };
       let {response,result} = await requestDocument();
@@ -371,7 +382,7 @@ export default function Workspace() {
       const bytes = Uint8Array.from(atob(result.content), (char) => char.charCodeAt(0));
       const blob = new Blob([bytes], {type:"application/xml"});
       if (outputRef.current) {
-        const containerFolder = containerFoldersRef.current[trip._container] ?? await outputRef.current.getDirectoryHandle(trip._container, {create:true});
+        const containerFolder = containerFoldersRef.current[trip._container] ?? await outputRef.current.getDirectoryHandle(modeForTrip(trip)==="non_container"?trip._recordId:trip._container, {create:true});
         const file = await containerFolder.getFileHandle(result.filename, {create:true});
         const writable = await file.createWritable(); await writable.write(blob); await writable.close();
       } else {
@@ -423,7 +434,7 @@ export default function Workspace() {
       setKonturTransfer(current=>({...current,busy:false,summary:"Черновик успешно создан в Контур.Логистике"}));
       setKonturStatuses(current=>({...current,[key]:{state:"saved",text:"Черновик создан"}}));
       setMessage(`Черновик ${document.filename} создан в Контур.Логистике`);
-      void checkDocumentPresence([trip._container]);
+      if(modeForTrip(trip)==="container"&&/^[A-Z]{4}\d{7}$/.test(trip._container))void checkDocumentPresence([trip._container]);
     } catch(error) {
       const text=error instanceof DOMException&&error.name==="AbortError"?"Превышено время ожидания ответа. Проверьте доступность сервера и повторите передачу.":error instanceof Error?error.message:"Ошибка передачи в Контур";
       updateStep(currentStep,"error",text);
@@ -433,15 +444,16 @@ export default function Workspace() {
   };
 
   const generateAll = async () => {
-    const readyTrips = results.filter((trip) => !trip._missingCargo && !trip._missingAuto);
+    const readyTrips = results.filter((trip) => !trip._missingAuto && Boolean(modeForTrip(trip)) && (modeForTrip(trip)!=="non_container" || Boolean(cargoNameForTrip(trip).trim())) && (modeForTrip(trip)==="non_container" || !trip._missingCargo));
     if (!readyTrips.length) return setMessage("Нет готовых перевозок для формирования");
     const outputFolderHandle=await ensureOutputFolderAccess(); if(!outputFolderHandle)return;
     setStatusModalOpen(true);
     containerFoldersRef.current={};
-    try { for(const trip of readyTrips) containerFoldersRef.current[trip._container]=await outputFolderHandle.getDirectoryHandle(trip._container,{create:true}); } catch(error) { const text=error instanceof Error?error.message:"Не удалось создать папки контейнеров"; setMessage(text); setGenerating(""); return; }
-    const initial:Record<string,{state:"queued";text:string}>={}; readyTrips.forEach((trip)=>["cargo","order","empty"].forEach((kind)=>{initial[trip._key+kind]={state:"queued",text:"В очереди"};})); setDocStatuses(initial);
-    setGenerating("all"); let done = 0; let failed = 0; const total = readyTrips.length * 3;
-    for (const trip of readyTrips) for (const kind of ["cargo","order","empty"] as const) {
+    try { for(const trip of readyTrips) containerFoldersRef.current[trip._container]=await outputFolderHandle.getDirectoryHandle(modeForTrip(trip)==="non_container"?trip._recordId:trip._container,{create:true}); } catch(error) { const text=error instanceof Error?error.message:"Не удалось создать папки документов"; setMessage(text); setGenerating(""); return; }
+    const kindsFor=(trip:Trip):DocumentKind[]=>modeForTrip(trip)==="non_container"?["cargo","order"]:["cargo","order","empty"];
+    const initial:Record<string,{state:"queued";text:string}>={}; readyTrips.forEach((trip)=>kindsFor(trip).forEach((kind)=>{initial[trip._key+kind]={state:"queued",text:"В очереди"};})); setDocStatuses(initial);
+    setGenerating("all"); let done = 0; let failed = 0; const total = readyTrips.reduce((sum,trip)=>sum+kindsFor(trip).length,0);
+    for (const trip of readyTrips) for (const kind of kindsFor(trip)) {
       setBulkProgress((done + failed) + " из " + total + " · " + trip._container + " · " + (kind === "cargo" ? "ЭТрН груз" : kind === "order" ? "Заявка" : "ЭТрН порожний"));
       (await generateDocument(trip, kind, true)) ? done++ : failed++;
     }
@@ -481,11 +493,15 @@ export default function Workspace() {
     const carrierName=value(auto,"Исполнитель","Партнер","Перевозчик")||"—";
     const warehouse=value(cargo,"Место доставки на склад","Место доставки груза (Маршрут заказа)","Адрес доставки","Место прибытия")||value(auto,"Место прибытия");
     const stock=value(cargo,"Контейнерный сток")||value(auto,"Контейнерный сток");
-    const transportReady=!trip._missingCargo&&!trip._missingAuto;
+    const mode=modeForTrip(trip);
+    const nonContainer=mode==="non_container";
+    const cargoName=cargoNameForTrip(trip);
+    const availableKinds=nonContainer?documentKinds.filter(item=>item.kind!=="empty"):documentKinds;
+    const transportReady=!trip._missingAuto&&Boolean(mode)&&(!trip._missingCargo||nonContainer)&&(!nonContainer||Boolean(cargoName.trim()));
     const edoState=edoChoices[recordKey];
     const parties=edoState?.parties.filter(party=>party.role==="carrier"||party.role==="consignee")||[];
     const edoReady=Boolean(edoState&&!edoState.loading&&!edoState.error&&edoState.parties.length&&edoState.parties.every(party=>party.selectedId));
-    const selected=selectedDocs[recordKey]||"cargo";
+    const selected=nonContainer&&selectedDocs[recordKey]==="empty"?"cargo":selectedDocs[recordKey]||"cargo";
     const active=documentKinds.find(item=>item.kind===selected)!;
     const services=forwardingServices[recordKey]||[];
     const route=value(auto,"Маршрут")||"—";
@@ -505,12 +521,12 @@ export default function Workspace() {
     const statusText=(kind:DocumentKind)=>{
       const sent=konturStatuses[recordKey+kind],local=docStatuses[recordKey+kind];
       if(sent?.state==="saved")return "черновик создан";
-      if(documentPresence[container]?.found?.[kind])return trip._recordCount>1?"есть по контейнеру":"есть";
+      if(!nonContainer&&documentPresence[container]?.found?.[kind])return trip._recordCount>1?"есть по контейнеру":"есть";
       if(sent?.state==="working")return "передаём";
       if(local?.state==="saved")return "XML скачан";
       if(local?.state==="working")return "формируем";
       if(sent?.state==="error"||local?.state==="error")return "ошибка";
-      return documentPresence[container]?.checking?"проверяем":documentPresence[container]?.found?"нет":"не проверено";
+      return nonContainer?"не проверено":documentPresence[container]?.checking?"проверяем":documentPresence[container]?.found?"нет":"не проверено";
     };
     const addManualService=()=>{
       const name=(manualServices[recordKey]||"").trim().replace(/\s+/g," ");
@@ -520,19 +536,20 @@ export default function Workspace() {
     };
     return <article className={styles.tripCard} key={recordKey}>
       <header className={styles.tripCardHead}>
-        <div><small>КОНТЕЙНЕР / НОМЕР</small><strong>{container}</strong>{trip._recordCount>1&&<small>ТТН/CMR № {trip._recordId} · {trip._recordCount} записи · статус документов по контейнеру</small>}</div>
+        <div><small>{nonContainer?"ЗАПИСЬ ТТН / CMR":"КОНТЕЙНЕР / НОМЕР"}</small><strong>{nonContainer?trip._recordId:container}</strong>{trip._recordCount>1&&<small>ТТН/CMR № {trip._recordId} · {trip._recordCount} записи</small>}</div>
         <div><small>ГРУЗОПОЛУЧАТЕЛЬ</small><strong>{consigneeName}</strong></div>
-        <div className={styles.tripBadges}>{documentKinds.map(item=><span key={item.kind} title={documentPresence[container]?.error||undefined} className={konturStatuses[recordKey+item.kind]?.state==="saved"||documentPresence[container]?.found?.[item.kind]?styles.tripBadgeReady:styles.tripBadgePending}>{({cargo:"ЭТрН",order:"Заявка",empty:"ЭТрН пор.",forwarding:"ПЭ"} as Record<DocumentKind,string>)[item.kind]} — {statusText(item.kind)}</span>)}<button disabled={!kontur.connected||documentPresence[container]?.checking} onClick={()=>void checkDocumentPresence([container])}>Проверить в Контуре</button></div>
+        <div className={styles.tripBadges}>{availableKinds.map(item=><span key={item.kind} title={nonContainer?undefined:documentPresence[container]?.error||undefined} className={konturStatuses[recordKey+item.kind]?.state==="saved"||(!nonContainer&&documentPresence[container]?.found?.[item.kind])?styles.tripBadgeReady:styles.tripBadgePending}>{({cargo:"ЭТрН",order:"Заявка",empty:"ЭТрН пор.",forwarding:"ПЭ"} as Record<DocumentKind,string>)[item.kind]} — {statusText(item.kind)}</span>)}{!nonContainer&&<button disabled={!kontur.connected||documentPresence[container]?.checking} onClick={()=>void checkDocumentPresence([container])}>Проверить в Контуре</button>}</div>
       </header>
       <div className={styles.tripCardBody}>
+        <fieldset className={styles.transportMode}><legend>Тип перевозки</legend><div>{transportModeOptions.map(option=><label key={option.value}><input type="radio" name={`transport-${recordKey}`} value={option.value} checked={mode===option.value} onChange={()=>setTransportModes(current=>({...current,[recordKey]:option.value}))}/>{option.label}</label>)}</div><small>{trip._transportMode?`Определено по полю «Типы грузовых единиц»: ${value(auto,"Типы грузовых единиц")||"—"}. Можно изменить вручную.`:"Тип не определён по ТТН/CMR. Выберите вариант вручную."}</small>{nonContainer&&<label className={styles.cargoNameField}>Наименование груза для документов<input value={cargoName} onChange={event=>setCargoNames(current=>({...current,[recordKey]:event.target.value}))} placeholder="Укажите груз по данным перевозки" required/></label>}</fieldset>
         <section className={styles.tripEdo} aria-label="Статус ЭДО участников">{edoState?.loading?<p>Проверяем ID ЭДО и историю подписей…</p>:edoState?.error?<p className={styles.edoError}>{edoState.error}</p>:parties.length?parties.map(party=>{const chosen=party.options.find(option=>option.id===party.selectedId);return <div key={party.role} className={!party.selectedId?styles.tripEdoMissing:""}><span><small>ЭДО · {party.role==="carrier"?"ПЕРЕВОЗЧИК":"ГРУЗОПОЛУЧАТЕЛЬ"}</small><strong>{party.name}</strong><em>{party.selectionSource==="history"?"Подтверждён подписью":party.selectionSource==="manual"?"Закреплён вручную":party.selectedId?"ID определён автоматически":party.options.length?"ID ЭДО не выбран":"ID ЭДО не найден"}</em>{chosen&&<small title={chosen.id}>{chosen.operator} · {chosen.id}</small>}</span>{party.options.length?<select value={party.selectedId} onChange={event=>{if(event.target.value)void saveEdoChoice(party,event.target.value);}}><option value="">Выберите ID</option>{party.options.map(option=><option key={option.id} value={option.id}>{option.operator} — {option.id}</option>)}</select>:<small className={styles.edoError}>Нет в справочнике ЭДО</small>}</div>;}):<p>Нет данных ЭДО</p>}</section>
         <div className={styles.tripCardGrid}>
-          <section className={styles.tripDocuments}><h3>Документы по перевозке</h3>{documentKinds.map(item=><div key={item.kind} className={`${styles.tripDocumentRow} ${selected===item.kind?styles.tripDocumentActive:""}`}><button className={styles.tripDocumentSelect} onClick={()=>setSelectedDocs(current=>({...current,[recordKey]:item.kind}))}><b>{item.icon}</b><span>{item.title}</span></button><small className={konturStatuses[recordKey+item.kind]?.state==="saved"||documentPresence[container]?.found?.[item.kind]?styles.tripBadgeReady:styles.tripBadgePending}>{statusText(item.kind)}</small>{documentPresence[container]?.links?.[item.kind]&&<a className={styles.tripDocumentLink} href={documentPresence[container].links[item.kind]} target="_blank" rel="noopener noreferrer" title={`Открыть ${item.title} в Контуре`}>Открыть ↗</a>}<button className={styles.tripDocumentAction} disabled={!transportReady||!edoReady||Boolean(generating)} onClick={()=>void generateDocument(trip,item.kind)}>XML</button><button className={styles.tripDocumentAction} disabled={!transportReady||!edoReady||!kontur.connected||konturStatuses[recordKey+item.kind]?.state==="working"} onClick={()=>void sendToKontur(trip,item.kind)}>Контур</button></div>)}</section>
+          <section className={styles.tripDocuments}><h3>Документы по перевозке</h3>{availableKinds.map(item=><div key={item.kind} className={`${styles.tripDocumentRow} ${selected===item.kind?styles.tripDocumentActive:""}`}><button className={styles.tripDocumentSelect} onClick={()=>setSelectedDocs(current=>({...current,[recordKey]:item.kind}))}><b>{item.icon}</b><span>{item.title}</span></button><small className={konturStatuses[recordKey+item.kind]?.state==="saved"||(!nonContainer&&documentPresence[container]?.found?.[item.kind])?styles.tripBadgeReady:styles.tripBadgePending}>{statusText(item.kind)}</small>{!nonContainer&&documentPresence[container]?.links?.[item.kind]&&<a className={styles.tripDocumentLink} href={documentPresence[container].links[item.kind]} target="_blank" rel="noopener noreferrer" title={`Открыть ${item.title} в Контуре`}>Открыть ↗</a>}<button className={styles.tripDocumentAction} disabled={!transportReady||!edoReady||Boolean(generating)} onClick={()=>void generateDocument(trip,item.kind)}>XML</button><button className={styles.tripDocumentAction} disabled={!transportReady||!edoReady||!kontur.connected||konturStatuses[recordKey+item.kind]?.state==="working"} onClick={()=>void sendToKontur(trip,item.kind)}>Контур</button></div>)}</section>
           <section className={styles.tripDetail}><h3>{active.title}</h3><p>Источник: TMS и сохранённые справочники. Проверьте сведения перед созданием черновика.</p>{selected==="forwarding"?<><div className={styles.tripDetailFacts}><span><small>КЛИЕНТ / ГРУЗООТПРАВИТЕЛЬ</small><strong>Таглекс</strong></span><span><small>ГРУЗОПОЛУЧАТЕЛЬ</small><strong>{consigneeName}</strong></span><span><small>ЭКСПЕДИТОР</small><strong>{carrierName} · из TMS</strong></span></div><div className={styles.tripServiceBox}><h4>Услуги для этого поручения</h4><p>Наименования попадут в титул клиента (Т1). Стоимость указывается экспедитором в ответном титуле (Т2).</p><div className={styles.tripServiceOptions}>{serviceOptions.map(option=><label key={option}><input type="checkbox" checked={services.includes(option)} onChange={()=>setForwardingServices(current=>({...current,[recordKey]:services.includes(option)?services.filter(item=>item!==option):[...services,option]}))}/>{option}</label>)}</div>{services.filter(item=>!serviceOptions.includes(item)).map(item=><button key={item} className={styles.tripServiceChip} onClick={()=>setForwardingServices(current=>({...current,[recordKey]:services.filter(value=>value!==item)}))}>{item} ×</button>)}<div className={styles.tripManualService}><input value={manualServices[recordKey]||""} onChange={event=>setManualServices(current=>({...current,[recordKey]:event.target.value}))} onKeyDown={event=>{if(event.key==="Enter"){event.preventDefault();addManualService();}}} placeholder="Введите услугу вручную"/><button onClick={addManualService}>Добавить</button></div></div></>:<div className={styles.tripDetailFacts}><span><small>КЛИЕНТ</small><strong>{clientName}</strong></span><span><small>ГРУЗОПОЛУЧАТЕЛЬ</small><strong>{consigneeName}</strong></span><span><small>ПЕРЕВОЗЧИК</small><strong>{carrierName}</strong></span></div>}
           <div className={styles.tripDetailFacts}>{detailFacts.slice(selected==="forwarding"||selected==="cargo"?3:2).map(([label,fact])=><span key={label}><small>{label}</small><strong>{fact}</strong></span>)}</div>
-          <div className={styles.tripDetailActions}><button disabled={!transportReady||!edoReady||Boolean(generating)} onClick={()=>void generateDocument(trip,selected)}>Скачать XML</button><button disabled={!transportReady||!edoReady||!kontur.connected||konturStatuses[recordKey+selected]?.state==="working"} onClick={()=>void sendToKontur(trip,selected)}>Создать черновик в Контуре</button></div>{!transportReady&&<p className={styles.edoError}>Для формирования нужны данные груза и ТТН/CMR.</p>}{transportReady&&!edoReady&&<p className={styles.edoError}>Сначала проверьте ID ЭДО участников.</p>}</section>
+          <div className={styles.tripDetailActions}><button disabled={!transportReady||!edoReady||Boolean(generating)} onClick={()=>void generateDocument(trip,selected)}>Скачать XML</button><button disabled={!transportReady||!edoReady||!kontur.connected||konturStatuses[recordKey+selected]?.state==="working"} onClick={()=>void sendToKontur(trip,selected)}>Создать черновик в Контуре</button></div>{!transportReady&&<p className={styles.edoError}>{!mode?"Выберите тип перевозки.":nonContainer&&!cargoName.trim()?"Укажите наименование груза для документов.":"Для формирования нужны данные груза и ТТН/CMR."}</p>}{transportReady&&!edoReady&&<p className={styles.edoError}>Сначала проверьте ID ЭДО участников.</p>}</section>
         </div>
-        <details className={styles.tripFacts}><summary>Данные перевозки <small>Показать все сведения</small></summary><div><span><small>КЛИЕНТ</small><strong>{clientName}</strong></span><span><small>ГРУЗОПОЛУЧАТЕЛЬ</small><strong>{consigneeName}</strong><em>{consigneeFromTms?"Из ТТН / CMR":"Подставлен клиент"}</em></span><span><small>ПЕРЕВОЗЧИК</small><strong>{carrierName}</strong></span><span><small>МАРШРУТ</small><strong>{value(auto,"Маршрут")||"—"}</strong></span><span><small>АДРЕС ОТПРАВЛЕНИЯ</small><strong>{resolveDeparture(auto)}</strong></span><span><small>СКЛАД КЛИЕНТА</small><strong>{warehouse||"—"}</strong></span><span><small>ПОГРУЗКА</small><strong>{formatTmsDate(value(auto,"Плановая дата отправления"))}</strong></span><span><small>ВЫГРУЗКА</small><strong>{formatTmsDate(value(auto,"Плановая дата прибытия","Последняя план дата прибытия","ETA (план дата прибытия)"))}</strong></span><span><small>КОНТЕЙНЕРНЫЙ СТОК</small><strong>{stock||"Нужно заполнить"}</strong></span><span><small>ВОДИТЕЛЬ И ТС</small><strong>{value(auto,"Водитель")||"—"} · {value(auto,"Номер автомашины","Транспортное средство")||"—"}</strong></span></div></details>
+        <details className={styles.tripFacts}><summary>Данные перевозки <small>Показать все сведения</small></summary><div><span><small>КЛИЕНТ</small><strong>{clientName}</strong></span><span><small>ГРУЗОПОЛУЧАТЕЛЬ</small><strong>{consigneeName}</strong><em>{consigneeFromTms?"Из ТТН / CMR":"Подставлен клиент"}</em></span><span><small>ПЕРЕВОЗЧИК</small><strong>{carrierName}</strong></span><span><small>МАРШРУТ</small><strong>{value(auto,"Маршрут")||"—"}</strong></span><span><small>АДРЕС ОТПРАВЛЕНИЯ</small><strong>{resolveDeparture(auto)}</strong></span><span><small>СКЛАД КЛИЕНТА</small><strong>{warehouse||"—"}</strong></span><span><small>ПОГРУЗКА</small><strong>{formatTmsDate(value(auto,"Плановая дата отправления"))}</strong></span><span><small>ВЫГРУЗКА</small><strong>{formatTmsDate(value(auto,"Плановая дата прибытия","Последняя план дата прибытия","ETA (план дата прибытия)"))}</strong></span>{nonContainer?<span><small>НАИМЕНОВАНИЕ ГРУЗА</small><strong>{cargoName||"Нужно заполнить"}</strong></span>:<span><small>КОНТЕЙНЕРНЫЙ СТОК</small><strong>{stock||"Нужно заполнить"}</strong></span>}<span><small>ВОДИТЕЛЬ И ТС</small><strong>{value(auto,"Водитель")||"—"} · {value(auto,"Номер автомашины","Транспортное средство")||"—"}</strong></span></div></details>
       </div>
     </article>;
   };
@@ -559,7 +576,7 @@ export default function Workspace() {
     <section className={styles.content}>
       {(busy||message)&&<div className={styles.notice}>{busy ? "Читаем файл…" : message}</div>}
 
-        <section className={styles.search}><label><strong>Номера контейнеров</strong><textarea value={query} onChange={(event) => setQuery(event.target.value)} placeholder={'WEDU8636223\nTGBU5962912'} autoFocus/></label><div className={styles.searchActions}><button onClick={search} disabled={!ready||busy}>Найти перевозки →</button><small aria-live="polite" role="status">{tmsSearchStatus}</small></div></section>
+        <section className={styles.search}><label><strong>Контейнеры или номера записей ТТН/CMR</strong><textarea value={query} onChange={(event) => setQuery(event.target.value)} placeholder={'WEDU8636223\n123456'} autoFocus/></label><div className={styles.searchActions}><button onClick={search} disabled={!ready||busy}>Найти перевозки →</button><small aria-live="polite" role="status">{tmsSearchStatus}</small></div></section>
       {ready && <>
         {results.length>0&&<section className={styles.tripCards} aria-label="Найденные перевозки"><div className={styles.tripCardsTitle}><h2>Найденные перевозки</h2><small>Все сведения прежней таблицы находятся в карточках</small></div>{results.map(renderTripCard)}</section>}
         {results.length > 0 && <><section className={styles.bulkBar}><div><strong>Скачать XML документов</strong><small>{outputFolder ? "Папка: " + outputFolder : "Выберите папку для сохранения XML. Передача в Контур выполняется отдельными кнопками «Контур»."}</small></div><div className={styles.employeeField}><label htmlFor="employee-xml">Сотрудник для XML</label><input id="employee-xml" list="employee-options" value={employee} onChange={event=>setEmployee(event.target.value)} placeholder="Введите ФИО или выберите из списка" autoComplete="off"/><datalist id="employee-options">{employees.map(name=><option key={name} value={name}/>)}</datalist><button type="button" onClick={()=>void saveEmployee()} disabled={savingEmployee||!employee.trim()||employees.some(name=>name.toLocaleLowerCase("ru")===employee.trim().replace(/\s+/g," ").toLocaleLowerCase("ru"))}>{savingEmployee?"Сохраняем…":"Добавить в справочник"}</button><small>Выбранное ФИО попадёт в XML как работник погрузки и подписант. Добавление сохраняет его для следующих документов.</small></div><button className={styles.folderButton} onClick={chooseOutputFolder}>Выбрать папку</button><button className={styles.bulkButton} disabled={Boolean(generating)||results.some(trip=>{const state=edoChoices[trip._key];return !state||state.loading||Boolean(state.error)||!state.parties.length||state.parties.some(party=>!party.selectedId);})} onClick={generateAll}>{generating === "all" ? (bulkProgress || "Формируем…") : "Скачать все XML"}</button></section><section className={styles.results}><div className={styles.tableWrap}><table><thead><tr><th>Статус</th><th>Документы</th><th>Статус ЭДО ЭТрН</th><th>Контейнер</th><th>Клиент / грузополучатель</th><th>Перевозчик</th><th>Маршрут и адреса</th><th>Погрузка / выгрузка</th><th>Контейнерный сток</th><th>Водитель и ТС</th></tr></thead><tbody>{results.map((trip) => {
