@@ -9,7 +9,7 @@ import * as XLSX from "xlsx";
 import { syncTms, contractRowsToCatalog, generateTmsCaptcha, TmsCaptchaError } from "./tms-sync.mjs";
 import { isTmsApiConfigured, resolveTmsCredentials } from "./tms-credentials.mjs";
 import { konturDocumentUrl, logisticsIdFromCustomData, verifiedForwardingUrl } from "./kontur-document-links.mjs";
-import { draftMessageToPost, savedDraftDocument } from "./kontur-draft.mjs";
+import { assertDraftTransferAllowed, draftMessageToPost, savedDraftDocument } from "./kontur-draft.mjs";
 import { loadMonthlyDocuments } from "./statistics-pagination.mjs";
 import { isInternationalTruckUnit } from "./statistics-unit-filter.mjs";
 import { forwardingDirection } from "./kontur-document-direction.mjs";
@@ -135,6 +135,7 @@ const konturDraftJobs=new Map();
 const setKonturDraftJob=(id,patch)=>konturDraftJobs.set(id,{...konturDraftJobs.get(id),...patch,updatedAt:Date.now()});
 async function createKonturDraft(jobId,payload){
   try {
+    assertDraftTransferAllowed(payload.kind);
     const config=konturConfig(); const format=konturDocumentFormat(payload.kind);
     setKonturDraftJob(jobId,{state:"working",phase:"authorization",message:"Получаем действующий токен Контур"});
     const accessToken=await getKonturAccessToken();
@@ -524,6 +525,7 @@ const server = http.createServer((request, response) => {
         if(response.writableEnded)return;
         const payload=JSON.parse(Buffer.concat(chunks).toString("utf8"));
         if(!["cargo","empty","order","forwarding"].includes(payload.kind)) throw new Error("Неизвестный вид документа");
+        assertDraftTransferAllowed(payload.kind);
         if(!payload.content||typeof payload.content!=="string") throw new Error("XML документа не передан");
         const jobId=randomBytes(16).toString("hex");
         konturDraftJobs.set(jobId,{state:"queued",phase:"queued",message:"Операция поставлена в очередь",createdAt:Date.now(),updatedAt:Date.now()});
@@ -548,6 +550,7 @@ const server = http.createServer((request, response) => {
         const found={cargo:false,order:false,empty:false,forwarding:false};
         const links={};
         let forwardingLocation=null;
+        let forwardingError=null;
         const result=await diadocJson(`/V5/SearchDocflows?boxId=${encodeURIComponent(config.boxId)}`,accessToken,{method:"POST",body:JSON.stringify({QueryString:container,Scope:"SearchScopeAny",Count:100})});
         for(const item of result.Documents||[]){
           if(item.DocumentInfo?.IsDeleted)continue;
@@ -570,6 +573,7 @@ const server = http.createServer((request, response) => {
               if(!links.forwarding||location==="logistics"){
                 links.forwarding=konturDocumentUrl(config.boxId,id.MessageId,id.EntityId,type,logisticsId,info.MessageType);
                 forwardingLocation=location;
+                forwardingError=location==="diadoc"?(item.Docflow?.OuterDocflows||[]).flatMap(flow=>flow.StatusEntities||[]).map(entity=>entity.Status).filter(status=>status?.Type==="Error").flatMap(status=>(status.Details||[]).map(detail=>detail.Text).filter(Boolean)).join("; ")||null:null;
               }
             }
           }else if(kind){found[kind]=true;links[kind] ||= konturDocumentUrl(config.boxId,id.MessageId,id.EntityId,type,logisticsIdFromCustomData(info.CustomData),info.MessageType);}
@@ -579,9 +583,9 @@ const server = http.createServer((request, response) => {
         if(verifiedLink&&linkedDocument?.messageId&&linkedDocument?.entityId){
           const flow=await diadocJson(`/V5/GetDocflows?boxId=${encodeURIComponent(config.boxId)}`,accessToken,{method:"POST",body:JSON.stringify({Requests:[{DocumentId:{MessageId:linkedDocument.messageId,EntityId:linkedDocument.entityId}}]})});
           const info=flow.Documents?.[0]?.DocumentInfo;
-          if(info?.FullVersion?.TypeNamedId==="LogisticsForwardingOrder"&&!info.IsDeleted&&info.DraftInfo?.IsRecycled!==true){found.forwarding=true;links.forwarding=verifiedLink;forwardingLocation="logistics";}
+          if(info?.FullVersion?.TypeNamedId==="LogisticsForwardingOrder"&&!info.IsDeleted&&info.DraftInfo?.IsRecycled!==true){found.forwarding=true;links.forwarding=verifiedLink;forwardingLocation="logistics";forwardingError=null;}
         }
-        return {container,found,links,forwardingLocation};
+        return {container,found,links,forwardingLocation,forwardingError};
       });
       response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify({items}));
     }catch(error){response.writeHead(502,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify({error:error.message||"Не удалось проверить документы в Диадоке"}));}})());return;
