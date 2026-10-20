@@ -4,7 +4,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import * as XLSX from "xlsx";
 import { syncTms, contractRowsToCatalog, generateTmsCaptcha, TmsCaptchaError } from "./tms-sync.mjs";
 import { isTmsApiConfigured, resolveTmsCredentials } from "./tms-credentials.mjs";
@@ -12,6 +12,7 @@ import { konturDocumentUrl, logisticsIdFromCustomData, verifiedForwardingUrl } f
 import { draftMessageToPost, savedDraftDocument } from "./kontur-draft.mjs";
 import { loadMonthlyDocuments } from "./statistics-pagination.mjs";
 import { isInternationalTruckUnit } from "./statistics-unit-filter.mjs";
+import { forwardingDirection } from "./kontur-document-direction.mjs";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const appPackage = JSON.parse(fs.readFileSync(path.join(root,"package.json"),"utf8"));
@@ -222,6 +223,26 @@ async function diadocEntityText(accessToken,boxId,messageId,entityId){
   if(!response.ok)throw new Error(`Не удалось прочитать титул: HTTP ${response.status}`);const bytes=Buffer.from(await response.arrayBuffer());
   const head=bytes.subarray(0,200).toString("ascii").toLowerCase();const encoding=head.includes("windows-1251")?"windows-1251":"utf-8";return new TextDecoder(encoding).decode(bytes);
 }
+const diadocId=value=>{const text=String(value||"");if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(text))throw new Error("Некорректный идентификатор документа");return text;};
+async function diadocEntityBytes(accessToken,boxId,messageId,entityId){
+  const result=await fetch(`${diadocApiUrl}/V4/GetEntityContent?boxId=${encodeURIComponent(boxId)}&messageId=${encodeURIComponent(messageId)}&entityId=${encodeURIComponent(entityId)}`,{headers:{Authorization:`Bearer ${accessToken}`},signal:AbortSignal.timeout(45_000)});
+  if(!result.ok)throw new Error(`Не удалось получить титул для подписи: HTTP ${result.status}`);
+  const bytes=Buffer.from(await result.arrayBuffer());if(!bytes.length||bytes.length>2_000_000)throw new Error("Некорректный размер титула для подписи");return bytes;
+}
+async function signableTitle(accessToken,boxId,messageId,entityId){
+  const [actions,flowResult]=await Promise.all([
+    diadocJson(`/GetDocumentActions?boxId=${encodeURIComponent(boxId)}&messageId=${encodeURIComponent(messageId)}&entityId=${encodeURIComponent(entityId)}`,accessToken),
+    diadocJson(`/V5/GetDocflows?boxId=${encodeURIComponent(boxId)}`,accessToken,{method:"POST",body:JSON.stringify({Requests:[{DocumentId:{MessageId:messageId,EntityId:entityId}}]})}),
+  ]);
+  const flow=flowResult.Documents?.[0];if(!flow||flow.DocumentInfo?.IsDeleted)throw new Error("Документ больше недоступен в Контуре");
+  const action=(actions.Actions||[]).find(item=>(item.Type===61||item.Type==="SignParticipantTitle")&&Number.isInteger(Number(item.Payload?.SignParticipantTitle?.TitleIndex)));
+  if(!action)return null;
+  const titleIndex=Number(action.Payload.SignParticipantTitle.TitleIndex);
+  const title=(flow.Docflow?.Titles||[]).find(item=>Number(item.TitleIndex)===titleIndex);
+  const titleEntityId=title?.Version?.EntityId;
+  if(!titleEntityId||title.AuthorSigning?.IsFinished===true)throw new Error("Титул для подписи не найден или уже подписан");
+  return {titleIndex,titleEntityId,documentType:flow.DocumentInfo?.DocumentType?.TypeNamedId||""};
+}
 const csvCell=value=>{const text=String(value??"");return /[;"\r\n]/.test(text)?`"${text.replaceAll('"','""')}"`:text;};
 const parseSemicolonCsv=text=>{const records=[];let record=[],cell="",quoted=false;const source=String(text||"").replace(/^\uFEFF/,"");for(let index=0;index<source.length;index++){const char=source[index];if(quoted){if(char==='"'&&source[index+1]==='"'){cell+='"';index++;}else if(char==='"')quoted=false;else cell+=char;}else if(char==='"')quoted=true;else if(char===';'){record.push(cell);cell="";}else if(char==='\n'){record.push(cell.replace(/\r$/, ""));records.push(record);record=[];cell="";}else cell+=char;}if(cell||record.length){record.push(cell.replace(/\r$/, ""));records.push(record);}const headers=records.shift()||[];return records.filter(row=>row.some(Boolean)).map(row=>Object.fromEntries(headers.map((header,index)=>[header,row[index]||""])));};
 async function syncKonturCounteragents(onProgress=()=>{}){
@@ -245,6 +266,7 @@ async function syncKonturCounteragents(onProgress=()=>{}){
 let counteragentSyncPromise=null;
 const runCounteragentSync=onProgress=>{if(!counteragentSyncPromise)counteragentSyncPromise=syncKonturCounteragents(onProgress).finally(()=>{counteragentSyncPromise=null;});return counteragentSyncPromise;};
 let signingControlCache={expiresAt:0,value:null};
+let forwardingOrdersCache={expiresAt:0,value:null};
 const statisticsCache=new Map();
 const actualDeliveryValue=row=>row["Фактическая дата доставки на склад"]||row["Фактическая дата прибытия"]||row["Фактическая дата доставки"]||row["Actual delivery date"]||"";
 const loadTmsActualTrips=(etrnItems,month)=>{const jsonFile=path.join(cacheRoot,"auto.json");if(!fs.existsSync(jsonFile))throw new Error("Нет данных ТТН/CMR TMS. Обновите данные TMS перед расчётом статистики.");let rows;try{rows=JSON.parse(fs.readFileSync(jsonFile,"utf8"));if(!Array.isArray(rows))throw new Error("Некорректный формат");}catch{throw new Error("Не удалось прочитать ТТН/CMR TMS. Обновите данные TMS.");}const etrnByContainer=new Map();for(const item of etrnItems)for(const container of item.containers||[])etrnByContainer.set(String(container).toUpperCase(),item);return rows.flatMap((row,index)=>{const rawDate=actualDeliveryValue(row),date=new Date(rawDate);if(!rawDate||Number.isNaN(date.getTime()))return [];const rowMonth=`${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,"0")}`;if(rowMonth<"2026-09"||month!=="all"&&rowMonth!==month)return [];const rawContainers=String(row["Номера грузовых единиц"]||row["Номер контейнера"]||"").toUpperCase();if(isInternationalTruckUnit(rawContainers))return [];const containers=[...new Set(rawContainers.match(/[A-Z]{4}\d{7}/g)||[])],etrn=containers.map(container=>etrnByContainer.get(container)).find(Boolean),client=String(row["Клиент"]||"").trim(),consignee=String(row["Грузополучатель"]||client||"Не указано").trim()||"Не указано";return [{id:String(row["Номер записи"]||index),month:rowMonth,carrier:String(row["Исполнитель"]||row["Партнер"]||row["Перевозчик"]||"Не указано").trim()||"Не указано",client,consignee,container:containers.join(", ")||rawContainers||"—",actualDeliveryDate:new Intl.DateTimeFormat("ru-RU",{timeZone:"Europe/Moscow"}).format(date),etrnNumber:etrn?.number||null,title2Signed:etrn?.carrierTitle2Signed===true,documentUrl:etrn?.documentUrl||null}];});};
@@ -273,25 +295,49 @@ async function loadSigningControl(){
   const docflows=[];for(let offset=0;offset<unique.length;offset+=100){const part=unique.slice(offset,offset+100);const response=await diadocJson(`/V5/GetDocflows?boxId=${encodeURIComponent(config.boxId)}`,accessToken,{method:"POST",body:JSON.stringify({Requests:part.map(item=>({DocumentId:{MessageId:item.MessageId,EntityId:item.EntityId}}))})});docflows.push(...(response.Documents||[]));}
   const flowById=new Map(docflows.map(item=>[`${item.DocumentId?.MessageId}:${item.DocumentId?.EntityId}`,item]));
   const items=(await mapLimit(unique,5,async document=>{
-    const flow=flowById.get(`${document.MessageId}:${document.EntityId}`);if(flow?.DocumentInfo?.IsDeleted)return [];const isForwarding=document.TypeNamedId==="LogisticsForwardingOrder";const titles=flow?.Docflow?.Titles||[];const waiting=titles.filter(title=>title.AuthorSigning&&title.AuthorSigning.IsFinished===false&&title.AuthorSigning.Status==="TitleAuthorStatusWaiting").filter(title=>!isForwarding||Number(title.TitleIndex||0)<2);const forwardingAgreed=isForwarding&&!document.IsIncoming&&!waiting.length&&titles.some(title=>Number(title.TitleIndex||0)===1&&title.AuthorSigning?.IsFinished===true);if(!waiting.length&&!forwardingAgreed)return [];
+    const flow=flowById.get(`${document.MessageId}:${document.EntityId}`);if(flow?.DocumentInfo?.IsDeleted)return [];const isForwarding=document.TypeNamedId==="LogisticsForwardingOrder";const titles=flow?.Docflow?.Titles||[];const waiting=titles.filter(title=>title.AuthorSigning&&title.AuthorSigning.IsFinished===false&&title.AuthorSigning.Status==="TitleAuthorStatusWaiting").filter(title=>!isForwarding||Number(title.TitleIndex||0)<2);const forwardingAgreed=isForwarding&&forwardingDirection(document)==="outgoing"&&!waiting.length&&titles.some(title=>Number(title.TitleIndex||0)===1&&title.AuthorSigning?.IsFinished===true);if(!waiting.length&&!forwardingAgreed)return [];
     const customData=Object.fromEntries((document.CustomData||[]).map(item=>[item.Key,item.Value]));
     const initialParts=String(customData["kl-initial-document-id"]||"").split(":");
     const sourceMessageId=initialParts.length===3?initialParts[1]:document.MessageId;
     const sourceEntityId=initialParts.length===3?initialParts[2]:document.EntityId;
     let xml="";try{xml=await diadocEntityText(accessToken,config.boxId,sourceMessageId,sourceEntityId);}catch{try{xml=await diadocEntityText(accessToken,config.boxId,document.MessageId,document.EntityId);}catch{/* metadata remains available */}}
     const isOrder=document.TypeNamedId==="LogisticsOrderRequest";const container=(xml.match(/[A-Z]{4}\d{7}/)||[])[0]||"—";const firstParty=(...tags)=>tags.map(tag=>xmlParty(xml,tag)).find(value=>value!=="Не указано")||"Не указано";const client=isForwarding?firstParty("СвКл","СвЗакТЭУ","СвЗак"):xmlParty(xml,"СвЗак");const carrier=isForwarding?firstParty("СвЭксп","СвИсп","СвПер"):(xmlParty(xml,"СвПер")!=="Не указано"?xmlParty(xml,"СвПер"):xmlParty(xml,"СвИсп"));const consignee=xmlParty(xml,"СвГП");
-    const trackedTitles=forwardingAgreed?[{TitleIndex:1,agreed:true}]:waiting;const serviceCost=isForwarding?forwardingServiceCost(xml):"";const forwardingDirection=isForwarding&&/ТАГЛЕКС/i.test(consignee)?"incoming":"outgoing";
+    const trackedTitles=forwardingAgreed?[{TitleIndex:1,agreed:true}]:waiting;const serviceCost=isForwarding?forwardingServiceCost(xml):"";const direction=isForwarding?forwardingDirection(document):null;
     return trackedTitles.map(title=>{const titleNumber=Number(title.TitleIndex||0)+1;let controlDate=null;let controlDateLabel="Дата документа";
-      if(isForwarding){controlDate=addHours(documentDate(document.DocumentDate)||new Date(document.CreationTimestamp||Date.now()),Number(process.env.KONTUR_FORWARDING_RESPONSE_HOURS||24));controlDateLabel=forwardingDirection==="incoming"?"Срок нашей подписи":"Срок подписи экспедитора";}
+      if(isForwarding){controlDate=addHours(documentDate(document.DocumentDate)||new Date(document.CreationTimestamp||Date.now()),Number(process.env.KONTUR_FORWARDING_RESPONSE_HOURS||24));controlDateLabel=direction==="incoming"?"Срок нашей подписи":"Срок подписи экспедитора";}
       else if(isOrder){controlDate=addHours(documentDate(document.DocumentDate)||new Date(document.CreationTimestamp||Date.now()),Number(process.env.KONTUR_ORDER_RESPONSE_HOURS||24));controlDateLabel="Срок ответа перевозчика";}
       else if(titleNumber===2){controlDate=new Date(xmlAttribute(xml,"ЗаявПогр")||xmlAttribute(xml,"StatedArrivalDateTime")||"");controlDateLabel="Плановая подача ТС под погрузку";}
       else if(titleNumber===3){controlDate=new Date(xmlAttribute(xml,"ДатВрДостГр")||xmlAttribute(xml,"DeliveryDateTime")||"");controlDateLabel="Плановая доставка груза";}
       else if(titleNumber===4){controlDate=new Date(xmlAttribute(xml,"ФДатВрУбыт")||xmlAttribute(xml,"ActualDepartureDateTime")||xmlAttribute(xml,"ФДатВрПриб")||"");controlDateLabel="Фактическое завершение выгрузки";}
       if(!controlDate||Number.isNaN(controlDate.getTime()))controlDate=documentDate(document.DocumentDate)||ticksToDate(document.SendTimestampTicks)||new Date(document.CreationTimestamp||Date.now());const delay=describeDelay(controlDate);
-      const agreed=Boolean(title.agreed);const responsible=isForwarding?(forwardingDirection==="incoming"?"Мы":"Экспедитор"):titleNumber===3?"Грузополучатель":titleNumber===1?"Грузоотправитель":"Перевозчик";
-      return {id:`${document.MessageId}:${document.EntityId}:${titleNumber}`,documentType:isForwarding?"Поручение экспедитору":isOrder?"Заявка":"ЭТрН",workflowGroup:isForwarding?forwardingDirection:null,direction:isForwarding?forwardingDirection:null,agreed,serviceCost,number:document.DocumentNumber||xmlAttribute(xml,isForwarding?"НомДок":isOrder?"НомерЗаяв":"НомерТрН")||"Без номера",container,client,carrier,consignee,waitingTitle:agreed?"Согласовано":`Т${titleNumber}`,responsible,status:agreed?"agreed":delay.status,statusText:agreed?"Подписано экспедитором":isForwarding&&forwardingDirection==="incoming"?"Требуется наша подпись":`Ожидается подпись: ${responsible.toLowerCase()}`,controlDate:controlDate.toISOString(),controlDateLabel,overdueText:agreed?"Согласовано":delay.text,messageId:document.MessageId,entityId:document.EntityId,sourceMessageId,sourceEntityId,documentUrl:konturDocumentUrl(config.boxId,document.MessageId,document.EntityId,document.TypeNamedId,customData["kl-id"])};});
+      const agreed=Boolean(title.agreed);const responsible=isForwarding?(direction==="incoming"?"Мы":"Экспедитор"):titleNumber===3?"Грузополучатель":titleNumber===1?"Грузоотправитель":"Перевозчик";
+      return {id:`${document.MessageId}:${document.EntityId}:${titleNumber}`,documentType:isForwarding?"Поручение экспедитору":isOrder?"Заявка":"ЭТрН",workflowGroup:direction,direction,agreed,serviceCost,number:document.DocumentNumber||xmlAttribute(xml,isForwarding?"НомДок":isOrder?"НомерЗаяв":"НомерТрН")||"Без номера",container,client,carrier,consignee,waitingTitle:agreed?"Согласовано":`Т${titleNumber}`,responsible,status:agreed?"agreed":delay.status,statusText:agreed?"Подписано экспедитором":isForwarding&&direction==="incoming"?"Требуется наша подпись":`Ожидается подпись: ${responsible.toLowerCase()}`,controlDate:controlDate.toISOString(),controlDateLabel,overdueText:agreed?"Согласовано":delay.text,messageId:document.MessageId,entityId:document.EntityId,sourceMessageId,sourceEntityId,documentUrl:konturDocumentUrl(config.boxId,document.MessageId,document.EntityId,document.TypeNamedId,customData["kl-id"])};});
   })).flat();
   return {source:"kontur",generatedAt:new Date().toISOString(),connected:true,user:konturUserInfo(loadKonturTokens()),items,note:null};
+}
+async function loadForwardingOrders(){
+  const config=konturConfig(),accessToken=await getKonturAccessToken();
+  const currentMonth=new Intl.DateTimeFormat("sv-SE",{year:"numeric",month:"2-digit",timeZone:"Europe/Moscow"}).format(new Date());
+  const documents=await loadMonthlyDocuments("2026-09",currentMonth,({fromDocumentDate,toDocumentDate,afterIndexKey})=>diadocJson(`/V4/GetDocuments?boxId=${encodeURIComponent(config.boxId)}`,accessToken,{method:"POST",body:JSON.stringify({DocumentTypeNamedIds:["LogisticsForwardingOrder"],DocumentCategory:"Any",FromDocumentDate:fromDocumentDate,ToDocumentDate:toDocumentDate,SortDirection:"Descending",Count:100,...(afterIndexKey?{AfterIndexKey:afterIndexKey}:{})})}));
+  const unique=[],seen=new Set();for(const document of documents){const key=`${document.MessageId}:${document.EntityId}`;if(document.IsDeleted||seen.has(key))continue;seen.add(key);unique.push(document);}
+  const docflows=[];for(let offset=0;offset<unique.length;offset+=100){const part=unique.slice(offset,offset+100);const flow=await diadocJson(`/V5/GetDocflows?boxId=${encodeURIComponent(config.boxId)}`,accessToken,{method:"POST",body:JSON.stringify({Requests:part.map(item=>({DocumentId:{MessageId:item.MessageId,EntityId:item.EntityId}}))})});docflows.push(...(flow.Documents||[]));}
+  const flowById=new Map(docflows.map(item=>[`${item.DocumentId?.MessageId}:${item.DocumentId?.EntityId}`,item]));
+  const boxesById=new Map();await mapLimit([...new Set(unique.map(item=>item.CounteragentBoxId).filter(Boolean))],8,async boxId=>{try{const box=await diadocJson(`/GetBox?boxId=${encodeURIComponent(boxId)}`,accessToken);const name=box.Organization?.FullName||box.Organization?.ShortName||box.Title;if(name)boxesById.set(boxId,name);}catch{}});
+  const items=(await mapLimit(unique,6,async document=>{
+    const flow=flowById.get(`${document.MessageId}:${document.EntityId}`);if(flow?.DocumentInfo?.IsDeleted)return null;
+    const customData=Object.fromEntries((document.CustomData||[]).map(item=>[item.Key,item.Value]));
+    const initialParts=String(customData["kl-initial-document-id"]||"").split(":");
+    const sourceMessageId=initialParts.length===3?initialParts[1]:document.MessageId,sourceEntityId=initialParts.length===3?initialParts[2]:document.EntityId;
+    let xml="";try{xml=await diadocEntityText(accessToken,config.boxId,sourceMessageId,sourceEntityId);}catch{try{xml=await diadocEntityText(accessToken,config.boxId,document.MessageId,document.EntityId);}catch{}}
+    const titles=flow?.Docflow?.Titles||[],title1=titles.find(item=>Number(item.TitleIndex)===0),title2=titles.find(item=>Number(item.TitleIndex)===1),title3=titles.find(item=>Number(item.TitleIndex)===2);
+    const agreed=title2?.AuthorSigning?.IsFinished===true,revoked=title3?.AuthorSigning?.IsFinished===true,firstSigned=title1?.AuthorSigning?.IsFinished===true;
+    const status=revoked?"Отозвано":agreed?"Согласовано":firstSigned?"Ожидается ответ":title1?.AuthorSigning?.IsFinished===false?"Ожидает подписи":"Черновик";
+    const party=(...tags)=>tags.map(tag=>xmlParty(xml,tag)).find(value=>value!=="Не указано")||"Не указано";
+    const direction=forwardingDirection(document),counteragent=boxesById.get(document.CounteragentBoxId)||"Не указано";
+    const client=party("СвКл","СвЗакТЭУ","СвЗак"),expeditor=party("СвЭксп","СвИсп","СвПер");
+    return {id:`${document.MessageId}:${document.EntityId}`,direction,number:document.DocumentNumber||xmlAttribute(xml,"НомДок")||"Без номера",container:(xml.match(/[A-Z]{4}\d{7}/)||[])[0]||"—",client:client==="Не указано"&&direction==="incoming"?counteragent:client,expeditor:expeditor==="Не указано"&&direction==="outgoing"?counteragent:expeditor,status,serviceCost:forwardingServiceCost(xml),date:document.DocumentDate||document.CreationTimestamp||"",messageId:document.MessageId,entityId:document.EntityId,documentUrl:konturDocumentUrl(config.boxId,document.MessageId,document.EntityId,"LogisticsForwardingOrder",customData["kl-id"])};
+  })).filter(Boolean);
+  return {source:"kontur",generatedAt:new Date().toISOString(),items};
 }
 
 const sourceFiles = {
@@ -542,6 +588,38 @@ const server = http.createServer((request, response) => {
   }
   if(request.method==="GET"&&url.pathname==="/api/kontur/signing-control"){
     void(async()=>{try{const force=url.searchParams.get("refresh")==="1";if(force||!signingControlCache.value||signingControlCache.expiresAt<Date.now()){signingControlCache.value=await loadSigningControl();signingControlCache.expiresAt=Date.now()+5*60_000;}response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify(signingControlCache.value));}catch(error){const unauthorized=["Сначала подключите","Сеанс Контур","invalid_grant","Invalid auth token"].some(text=>error.message?.includes(text));response.writeHead(unauthorized?401:502,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify({error:unauthorized?"Сеанс Контур истёк. Выполните вход повторно":error.message||"Не удалось получить статусы документов из Контур"}));}})();return;
+  }
+  if(request.method==="GET"&&url.pathname==="/api/kontur/forwarding-orders"){
+    void(async()=>{try{const force=url.searchParams.get("refresh")==="1";if(force||!forwardingOrdersCache.value||forwardingOrdersCache.expiresAt<Date.now()){forwardingOrdersCache.value=await loadForwardingOrders();forwardingOrdersCache.expiresAt=Date.now()+5*60_000;}response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify(forwardingOrdersCache.value));}catch(error){response.writeHead(502,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify({error:error.message||"Не удалось загрузить поручения из Контура"}));}})();return;
+  }
+  if(request.method==="GET"&&url.pathname==="/api/kontur/signable-title"){
+    void(async()=>{try{
+      const messageId=diadocId(url.searchParams.get("messageId")),entityId=diadocId(url.searchParams.get("entityId"));
+      const config=konturConfig(),accessToken=await getKonturAccessToken();
+      const title=await signableTitle(accessToken,config.boxId,messageId,entityId);
+      if(!title){response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify({canSign:false,reason:"Для текущего пользователя у документа нет готового титула, доступного для подписи"}));return;}
+      const bytes=await diadocEntityBytes(accessToken,config.boxId,messageId,title.titleEntityId);
+      response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify({canSign:true,titleIndex:title.titleIndex,titleEntityId:title.titleEntityId,contentBase64:bytes.toString("base64"),contentSha256:createHash("sha256").update(bytes).digest("hex")}));
+    }catch(error){response.writeHead(400,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify({error:error.message||"Не удалось подготовить титул к подписи"}));}})();return;
+  }
+  if(request.method==="POST"&&url.pathname==="/api/kontur/sign-document"){
+    const chunks=[];let size=0;request.on("data",chunk=>{size+=chunk.length;if(size>2_000_000)request.destroy();else chunks.push(chunk);});request.on("end",()=>void(async()=>{try{
+      const payload=JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      const messageId=diadocId(payload.messageId),entityId=diadocId(payload.entityId),titleEntityId=diadocId(payload.titleEntityId);
+      if(!/^[0-9a-f]{64}$/i.test(String(payload.contentSha256||"")))throw new Error("Некорректная контрольная сумма титула");
+      const signature=Buffer.from(String(payload.signatureBase64||""),"base64");if(signature.length<128||signature.length>1_000_000||signature[0]!==0x30)throw new Error("Некорректная электронная подпись");
+      const config=konturConfig(),accessToken=await getKonturAccessToken();const title=await signableTitle(accessToken,config.boxId,messageId,entityId);
+      if(!title||title.titleEntityId.toLowerCase()!==titleEntityId.toLowerCase()||title.titleIndex!==Number(payload.titleIndex))throw new Error("Состояние титула изменилось. Обновите документ и повторите подпись");
+      const content=await diadocEntityBytes(accessToken,config.boxId,messageId,titleEntityId);
+      if(createHash("sha256").update(content).digest("hex")!==payload.contentSha256.toLowerCase())throw new Error("Содержимое титула изменилось. Подпись не отправлена");
+      const fullId=payload.powerOfAttorney?.fullId;
+      const powerOfAttorney=fullId&&/^[0-9a-f-]{36}$/i.test(String(fullId.RegistrationNumber||""))&&/^\d{10,12}$/.test(String(fullId.IssuerInn||""))&&/^\d{10,12}$/.test(String(fullId.RepresentativeInn||""))?{FullId:{RegistrationNumber:fullId.RegistrationNumber,IssuerInn:fullId.IssuerInn,RepresentativeInn:fullId.RepresentativeInn},UseDefault:false}:null;
+      if(fullId&&!powerOfAttorney)throw new Error("Некорректные реквизиты МЧД");
+      const patch=await diadocJson("/V4/PostMessagePatch",accessToken,{method:"POST",body:JSON.stringify({BoxId:config.boxId,MessageId:messageId,Signatures:[{ParentEntityId:titleEntityId,Signature:payload.signatureBase64,...(powerOfAttorney?{PowerOfAttorney:powerOfAttorney}:{})}]})});
+      signingControlCache.value=null;
+      forwardingOrdersCache.value=null;
+      response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify({ok:true,messageId:patch.MessageId,patchId:patch.PatchId}));
+    }catch(error){response.writeHead(400,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify({error:error.message||"Не удалось отправить подпись"}));}})());return;
   }
   if(request.method==="GET"&&url.pathname==="/api/kontur/statistics"){
     void(async()=>{try{const month=url.searchParams.get("month")||"all";const result=await loadDocumentStatistics(month,url.searchParams.get("refresh")==="1");response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify(result));}catch(error){response.writeHead(502,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({error:error.message||"Не удалось получить статистику"}));}})();return;
