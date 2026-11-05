@@ -259,6 +259,43 @@ def handle(request):
             else:
                 orders = [order for order in orders if needle in " ".join([order["number"], order["client"], order["route"], *order["containers"]]).casefold()]
         return {"items":orders[:limit], "total":len(orders)}
+    if action == "order_multi":
+        selected = request.get("items") or []
+        if not isinstance(selected, list) or not 2 <= len(selected) <= 20:
+            raise ValueError("Для общей заявки выберите от 2 до 20 контейнеров")
+        order_number = clean(request.get("orderNumber"))
+        user = clean(request.get("user"))
+        if not order_number or not user:
+            raise ValueError("Укажите номер заявки и сотрудника")
+        contexts, warnings, corrections = [], [], []
+        seen = set()
+        for selected_item in selected:
+            container_number = clean(selected_item.get("container")).upper()
+            if not re.fullmatch(r"[A-Z]{4}\d{7}", container_number) or container_number in seen:
+                raise ValueError("Выбраны некорректные или повторяющиеся номера контейнеров")
+            seen.add(container_number)
+            cargo, auto = selected_record(container_number, clean(selected_item.get("recordId")))
+            if not auto or not cargo:
+                raise ValueError(f"Для {container_number} не найдены данные груза или ТТН/CMR")
+            context = generator.context({**cargo, **auto, "_container":container_number}, date.fromisoformat(request.get("date") or date.today().isoformat()), user, None)
+            apply_transport_context(context, auto, request, value(cargo, "Наименование груза"))
+            if context.get("transport_mode") != "container":
+                raise ValueError("Общая заявка доступна только для контейнерных перевозок")
+            context["order_number"] = order_number
+            context["gar_addresses"] = request.get("garAddresses") or {}
+            editable, applied = prepare_manual_fields(context, "order", request.get("savedCorrections"), request.get("manualValues"))
+            corrections.extend(applied)
+            for role, participant_id in (request.get("edoOverrides") or {}).items():
+                if role in {"client", "consignee", "carrier"} and clean(participant_id):
+                    context[f"{role}_edo"] = clean(participant_id)
+            warnings.extend(generator.warnings(context, ezz=True))
+            contexts.append(context)
+        generator.validate_ezz_group(contexts)
+        warnings = list(dict.fromkeys(warnings))
+        if warnings and not request.get("confirmWarnings"):
+            return {"requiresConfirmation":True, "warnings":warnings, "editableFields":editable}
+        filename, content = generator.ezz_multi(contexts)
+        return {"filename":filename, "content":base64.b64encode(content).decode("ascii"), "appliedCorrections":corrections}
     if action == "forwarding_userdata_multi":
         containers = [clean(item) for item in request.get("containers", []) if clean(item)]
         services = list(dict.fromkeys(clean(item) for item in request.get("services", []) if clean(item)))
