@@ -13,9 +13,12 @@ type Item={
 };
 type TmsTrip={id:string;month:string;carrier:string;client:string;consignee:string;container:string;actualDeliveryDate:string;etrnNumber:string|null;title2Signed:boolean;documentUrl:string|null};
 type EntityRow={key:string;name:string;aliases:Set<string>;total:number;signed:number;documents:Item[];trips:TmsTrip[]};
+type Weekly={currentWeek:string;previousWeek:string;previous:{capturedAt:string;items:Item[];tmsTrips:TmsTrip[]}|null};
+type WeekRow={key:string;name:string;total:number;done:number;pending:number;previousPending:number|null};
 
 const currentMonth=()=>new Date().toLocaleDateString("sv-SE",{year:"numeric",month:"2-digit",timeZone:"Europe/Moscow"});
 const monthName=(value:string,short=false)=>{const [year,month]=value.split("-").map(Number);return year&&month?new Intl.DateTimeFormat("ru-RU",short?{month:"short"}:{month:"long",year:"numeric"}).format(new Date(year,month-1,1)):value;};
+const weekLabel=(value:string)=>new Intl.DateTimeFormat("ru-RU",{day:"2-digit",month:"2-digit",year:"numeric",timeZone:"UTC"}).format(new Date(`${value}T12:00:00Z`));
 const displayName=(value:string)=>{let result=String(value||"Не указано").replace(/\([^)]*по\s+поручению[^)]*\)/giu,"").trim();const quoted=result.match(/[«"]([^»"]{2,})[»"]/u)?.[1];if(quoted)result=quoted;return result.replace(/^(?:общество\s+с\s+ограниченной\s+ответственностью|публичное\s+акционерное\s+общество|акционерное\s+общество|оооо|ооо|пао|ао|ип)\s*/iu,"").replace(/^[«"]|[»"]$/gu,"").trim()||"Не указано";};
 const entityKey=(value:string)=>displayName(value).toLocaleUpperCase("ru-RU").replace(/[^A-ZА-ЯЁ0-9]/gu,"");
 const consigneeName=(value:string)=>{const raw=String(value||"").trim(),plain=displayName(raw),key=entityKey(raw);if(/ТЯГОВАЯ\s+СИЛА/iu.test(raw))return "Тяговая Сила";if(key==="РО"||key==="ЮСИДЖИ")return "Юсиджи";if(key==="ПК"||key==="ПКПАКПОЛИМЕР")return "ПК ПАКПОЛИМЕР";if(/РУССКОЕ\s+ОБЩЕСТВО\s+СОДЕЙСТВИЯ\s+ШИННИКАМ\s*[-–]\s*ИНВЕСТ/iu.test(raw)||/^РОСШИНА\s*[-–]?\s*ИНВЕСТ$/iu.test(plain))return "Росшина - Инвест";return plain;};
@@ -25,13 +28,14 @@ const isTaglex=(value:string)=>consigneeKey(value)==="ТАГЛЕКС";
 export default function Statistics(){
   const [items,setItems]=useState<Item[]>([]);
   const [tmsTrips,setTmsTrips]=useState<TmsTrip[]>([]);
+  const [weekly,setWeekly]=useState<Weekly|null>(null);
   const [loading,setLoading]=useState(true),[error,setError]=useState("");
   const [refreshKey,setRefreshKey]=useState(0);
   const [exporting,setExporting]=useState(false);
   const [month,setMonth]=useState("all"),[expanded,setExpanded]=useState<string|null>(null);
   const [rankingMode,setRankingMode]=useState<"best"|"worst">("best"),[audience,setAudience]=useState<Audience>("carrier");
   const [backlogMode,setBacklogMode]=useState<BacklogMode>("carrier");
-  useEffect(()=>{let active=true;setLoading(true);setError("");void fetch(`/api/kontur/statistics?month=${encodeURIComponent(month)}${refreshKey?"&refresh=1":""}`,{cache:"no-store"}).then(async response=>{const result=await response.json();if(!response.ok)throw new Error(result.error||"Не удалось загрузить статистику");if(active){setItems(result.items||[]);setTmsTrips(result.tmsTrips||[]);}}).catch(value=>{if(active){setItems([]);setTmsTrips([]);setError(value instanceof Error?value.message:"Ошибка загрузки");}}).finally(()=>{if(active)setLoading(false);});return()=>{active=false;};},[month,refreshKey]);
+  useEffect(()=>{let active=true;setLoading(true);setError("");void fetch(`/api/kontur/statistics?month=${encodeURIComponent(month)}${refreshKey?"&refresh=1":""}`,{cache:"no-store"}).then(async response=>{const result=await response.json();if(!response.ok)throw new Error(result.error||"Не удалось загрузить статистику");if(active){setItems(result.items||[]);setTmsTrips(result.tmsTrips||[]);setWeekly(result.weekly||null);}}).catch(value=>{if(active){setItems([]);setTmsTrips([]);setWeekly(null);setError(value instanceof Error?value.message:"Ошибка загрузки");}}).finally(()=>{if(active)setLoading(false);});return()=>{active=false;};},[month,refreshKey]);
 
   const months=useMemo(()=>{const values:string[]=[];const [year,number]=currentMonth().split("-").map(Number);for(let cursor=new Date(year,number-1,1);cursor>=new Date(2026,8,1);cursor.setMonth(cursor.getMonth()-1))values.push(`${cursor.getFullYear()}-${String(cursor.getMonth()+1).padStart(2,"0")}`);return values;},[]);
   const selected=useMemo(()=>items.filter(item=>(month==="all"||item.month===month)&&(audience!=="consignee"||(item.title1or2Signed&&!isTaglex(item.consignee)))),[items,month,audience]);
@@ -58,6 +62,30 @@ export default function Statistics(){
   const ranked=useMemo(()=>entities.filter(row=>row.name!=="Не указано"&&row.total>0).map(row=>({...row,percent:Math.round(row.signed/row.total*100),unsigned:row.total-row.signed})).sort((a,b)=>rankingMode==="best"?b.signed-a.signed||b.percent-a.percent||b.total-a.total:b.unsigned-a.unsigned||a.percent-b.percent||b.total-a.total).slice(0,5),[entities,rankingMode]);
   const rankingSigned=ranked.reduce((sum,row)=>sum+row.signed,0),rankingTotal=ranked.reduce((sum,row)=>sum+row.total,0),rankingPercent=rankingTotal?Math.round(rankingSigned/rankingTotal*100):0;
   const tripTotals=useMemo(()=>({total:selectedTrips.length,withEtrn:selectedTrips.filter(trip=>trip.etrnNumber).length}),[selectedTrips]);
+  const weekRows=useMemo(()=>{
+    const group=(documents:Item[],trips:TmsTrip[])=>{
+      const result=new Map<string,WeekRow>();
+      if(audience==="backlog")for(const trip of trips){
+        const raw=backlogMode==="carrier"?trip.carrier:trip.consignee;
+        const key=(backlogMode==="carrier"?entityKey(raw):consigneeKey(raw))||"НЕУКАЗАНО";
+        const row=result.get(key)||{key,name:backlogMode==="carrier"?displayName(raw):consigneeName(raw),total:0,done:0,pending:0,previousPending:null};
+        row.total++;if(trip.etrnNumber)row.done++;else row.pending++;result.set(key,row);
+      }
+      else for(const item of documents){
+        if(audience==="consignee"&&(!item.title1or2Signed||isTaglex(item.consignee)))continue;
+        const raw=audience==="consignee"?item.consignee:item.carrier;
+        const key=(audience==="consignee"?consigneeKey(raw):entityKey(raw))||"НЕУКАЗАНО";
+        const row=result.get(key)||{key,name:audience==="consignee"?consigneeName(raw):displayName(raw),total:0,done:0,pending:0,previousPending:null};
+        row.total++;if(audience==="consignee"?item.consigneeTitle3Signed:item.carrierTitle2Signed)row.done++;else row.pending++;result.set(key,row);
+      }
+      return result;
+    };
+    const current=group(items.filter(item=>month==="all"||item.month===month),tmsTrips.filter(item=>month==="all"||item.month===month));
+    const previous=weekly?.previous?group(weekly.previous.items.filter(item=>month==="all"||item.month===month),weekly.previous.tmsTrips.filter(item=>month==="all"||item.month===month)):null;
+    const keys=new Set([...current.keys(),...(previous?.keys()||[])]);
+    return [...keys].map(key=>({...(current.get(key)||{key,name:previous?.get(key)?.name||"Не указано",total:0,done:0,pending:0,previousPending:null}),previousPending:previous?.get(key)?.pending??(previous?0:null)})).sort((a,b)=>b.pending-a.pending||a.name.localeCompare(b.name,"ru"));
+  },[items,tmsTrips,weekly,month,audience,backlogMode]);
+  const weekTotals=useMemo(()=>({total:weekRows.reduce((sum,row)=>sum+row.total,0),done:weekRows.reduce((sum,row)=>sum+row.done,0),pending:weekRows.reduce((sum,row)=>sum+row.pending,0),previousPending:weekly?.previous?weekRows.reduce((sum,row)=>sum+(row.previousPending||0),0):null}),[weekRows,weekly]);
   const selectedBacklogRow=backlogRows.find(row=>row.key===expanded)||backlogRows[0];
   const maxBacklogTrips=Math.max(1,...backlogRows.map(row=>row.trips.length));
   const titleNumber=audience==="consignee"?3:2,entityLabel=audience==="consignee"?"Грузополучатель":"Перевозчик";
@@ -67,17 +95,17 @@ export default function Statistics(){
     try{
       const XLSX=await import("xlsx");
       const groupLabel=backlogMode==="consignee"?"Грузополучатели":"Перевозчики";
-      const summaryRows:(string|number)[][]=[["Период","Разрез","Контрагент","Рейсы TMS","С ЭТрН","Backlog","Покрытие ЭТрН"]];
-      for(const row of backlogRows){const total=row.trips.length,withEtrn=row.trips.filter(trip=>Boolean(trip.etrnNumber)).length;summaryRows.push([month==="all"?"С сентября 2026":month,groupLabel,row.name,total,withEtrn,total-withEtrn,total?withEtrn/total:0]);}
+      const summaryRows:(string|number)[][]=[["Период","Разрез","Контрагент","Рейсы TMS","С ЭТрН",`Backlog неделя ${weekly?.currentWeek||"текущая"}`,"Покрытие ЭТрН",`Backlog неделя ${weekly?.previousWeek||"прошлая"}`,"Изменение backlog","Изменение, %"]];
+      for(const row of backlogRows){const total=row.trips.length,withEtrn=row.trips.filter(trip=>Boolean(trip.etrnNumber)).length,previous=weekRows.find(item=>item.key===row.key)?.previousPending;summaryRows.push([month==="all"?"С сентября 2026":month,groupLabel,row.name,total,withEtrn,total-withEtrn,total?withEtrn/total:0,previous??"",previous===null||previous===undefined?"":total-withEtrn-previous,previous===null||previous===undefined||previous===0?"":(total-withEtrn-previous)/previous]);}
       const detailRows:(string|number)[][]=[["Месяц","Грузополучатель","Перевозчик","Клиент","Контейнеры","Дата доставки на склад","Статус ЭТрН","Номер ЭТрН","Ссылка на ЭТрН","ID рейса TMS"]];
       for(const row of backlogRows)for(const trip of row.trips)detailRows.push([trip.month,consigneeName(trip.consignee),displayName(trip.carrier),trip.client,trip.container,trip.actualDeliveryDate,trip.etrnNumber?"С ЭТрН":"Backlog",trip.etrnNumber||"",trip.documentUrl||"",trip.id]);
       const workbook=XLSX.utils.book_new();
       const summary=XLSX.utils.aoa_to_sheet(summaryRows),details=XLSX.utils.aoa_to_sheet(detailRows);
-      summary["!cols"]=[{wch:12},{wch:19},{wch:48},{wch:14},{wch:12},{wch:12},{wch:18}];
+      summary["!cols"]=[{wch:18},{wch:19},{wch:48},{wch:14},{wch:12},{wch:18},{wch:18},{wch:23},{wch:20},{wch:16}];
       details["!cols"]=[{wch:12},{wch:46},{wch:38},{wch:38},{wch:25},{wch:24},{wch:16},{wch:28},{wch:55},{wch:17}];
-      summary["!autofilter"]={ref:`A1:G${summaryRows.length}`};
+      summary["!autofilter"]={ref:`A1:J${summaryRows.length}`};
       details["!autofilter"]={ref:`A1:J${detailRows.length}`};
-      for(let index=2;index<=summaryRows.length;index++){const cell=summary[`G${index}`];if(cell)cell.z="0%";}
+      for(let index=2;index<=summaryRows.length;index++){for(const col of ["G","J"]){const cell=summary[`${col}${index}`];if(cell&&cell.t==="n")cell.z="0%";}}
       XLSX.utils.book_append_sheet(workbook,summary,"Сводка");
       XLSX.utils.book_append_sheet(workbook,details,"Рейсы и контейнеры");
       XLSX.writeFile(workbook,`backlog-${backlogMode}-${month}.xlsx`);
@@ -99,6 +127,37 @@ export default function Statistics(){
     }catch(value){setError(value instanceof Error?value.message:"Не удалось выгрузить динамику");}
     finally{setExporting(false);}
   };
+  const exportWeekly=async()=>{
+    if(loading||exporting)return;
+    setExporting(true);setError("");
+    try{
+      const XLSX=await import("xlsx");
+      const rows:(string|number)[][]=[["Период","Разрез","Контрагент",audience==="backlog"?"Рейсы TMS":"ЭТрН",audience==="backlog"?"С ЭТрН":`Подписано Т${titleNumber}`,"Ожидают сейчас",`Ожидали на неделе ${weekly?.previousWeek||"—"}`,"Изменение, шт.","Изменение, %"]];
+      for(const row of weekRows)rows.push([month==="all"?"С сентября 2026":month,audience==="backlog"?(backlogMode==="carrier"?"Перевозчики":"Грузополучатели"):audience==="carrier"?"Титул 2":"Титул 3",row.name,row.total,row.done,row.pending,row.previousPending??"",row.previousPending===null?"":row.pending-row.previousPending,row.previousPending? (row.pending-row.previousPending)/row.previousPending:""]);
+      const workbook=XLSX.utils.book_new(),sheet=XLSX.utils.aoa_to_sheet(rows);
+      sheet["!cols"]=[{wch:19},{wch:19},{wch:48},{wch:14},{wch:16},{wch:18},{wch:24},{wch:20},{wch:16}];
+      sheet["!autofilter"]={ref:`A1:I${rows.length}`};
+      for(let index=2;index<=rows.length;index++){const cell=sheet[`I${index}`];if(cell&&cell.t==="n")cell.z="0%";}
+      XLSX.utils.book_append_sheet(workbook,sheet,"Недельное сравнение");
+      XLSX.writeFile(workbook,`weekly-${audience}-${month}.xlsx`);
+    }catch(value){setError(value instanceof Error?value.message:"Не удалось выгрузить недельную динамику");}
+    finally{setExporting(false);}
+  };
+  const exportUnsigned=async()=>{
+    if(loading||exporting||audience==="backlog")return;
+    setExporting(true);setError("");
+    try{
+      const XLSX=await import("xlsx");
+      const rows:(string|number)[][]=[["Период","Номер ЭТрН","Контейнеры","Перевозчик","Грузополучатель","Дата доставки","Ожидаем подпись от","Титул","Ссылка в Контур.Логистику"]];
+      for(const item of selected.filter(value=>!signedFlag(value)))rows.push([item.month,item.number,item.containers.join(", "),item.carrier,item.consignee,item.deliveryDate,!item.title1or2Signed?"Грузоотправитель":!item.carrierTitle2Signed?"Перевозчик":"Грузополучатель",`Т${titleNumber}`,item.documentUrl||""]);
+      const workbook=XLSX.utils.book_new(),sheet=XLSX.utils.aoa_to_sheet(rows);
+      sheet["!cols"]=[{wch:13},{wch:27},{wch:28},{wch:42},{wch:42},{wch:18},{wch:25},{wch:10},{wch:70}];
+      sheet["!autofilter"]={ref:`A1:I${rows.length}`};
+      XLSX.utils.book_append_sheet(workbook,sheet,`Не подписано Т${titleNumber}`);
+      XLSX.writeFile(workbook,`unsigned-title-${titleNumber}-${month}.xlsx`);
+    }catch(value){setError(value instanceof Error?value.message:"Не удалось выгрузить неподписанные ЭТрН");}
+    finally{setExporting(false);}
+  };
 
   return <main className={styles.shell}>
     <header className={styles.topbar}><div style={{background:"transparent"}}><img src="/agr-logo.png" alt="Логотип АГР" width={40} height={40} style={{display:"block",objectFit:"contain"}}/></div><strong>Создание ЭПД <small>версия {appPackage.version}</small></strong><nav><a href="/workspace">Создание документов</a><a href="/forwarding-orders">Поручения экспедиторам</a><a href="/control">Контроль подписания</a><a className={styles.active} href="/statistics">Статистика</a><a href="/edo-settings">Настройки ID ЭДО</a></nav></header>
@@ -109,6 +168,11 @@ export default function Statistics(){
       <section className={styles.monthFilter}><label><span>Период</span><select value={month} onChange={event=>{setMonth(event.target.value);setExpanded(null);}}><option value="all">Все данные с сентября 2026</option>{months.map(value=><option value={value} key={value}>{monthName(value)}</option>)}</select></label></section>
       {!error&&!loading&&<>
       <section className={styles.metrics}>{(audience==="backlog"?[{name:"Фактические рейсы TMS",value:tripTotals.total},{name:"Рейсы с ЭТрН",value:tripTotals.withEtrn},{name:"Backlog без ЭТрН",value:tripTotals.total-tripTotals.withEtrn},{name:"Покрытие рейсов",value:tripTotals.total?`${Math.round(tripTotals.withEtrn/tripTotals.total*100)}%`:"0%"}]:[{name:"ЭТрН в контроле",value:totals.total},{name:`Подписано Т${titleNumber}`,value:totals.signed},{name:audience==="carrier"?"Не подписано Т2":"Отклонения · нет Т3",value:totals.unsigned}]).map(card=><article key={card.name}><span>{card.name}</span><strong>{card.value}</strong></article>)}</section>
+      <section className={styles.weeklyCard} aria-label="Недельное сравнение"><header><div><h2>Динамика по неделям</h2><p>Недели начинаются в понедельник по московскому времени. Сравниваются контрольные срезы по выбранному периоду.</p></div><button type="button" onClick={()=>void exportWeekly()} disabled={exporting||loading}>{exporting?"Готовим Excel…":"Скачать сравнение · Excel"}</button></header>
+        <div className={styles.weeklyOverview}><div><span>Текущая неделя · с {weekly?weekLabel(weekly.currentWeek):"—"}</span><strong>{weekTotals.pending}</strong><small>{audience==="backlog"?"backlog":"не подписано"}</small></div><div><span>Прошлая неделя · с {weekly?weekLabel(weekly.previousWeek):"—"}</span><strong>{weekTotals.previousPending??"—"}</strong><small>{weekly?.previous?`Срез: ${new Date(weekly.previous.capturedAt).toLocaleString("ru-RU",{timeZone:"Europe/Moscow"})}`:"Срез прошлой недели пока отсутствует"}</small></div><div><span>Изменение</span><strong>{weekTotals.previousPending===null?"—":`${weekTotals.pending-weekTotals.previousPending>0?"+":""}${weekTotals.pending-weekTotals.previousPending}`}</strong><small>{weekTotals.previousPending?`${Math.round((weekTotals.pending-weekTotals.previousPending)/weekTotals.previousPending*100)}% к прошлой неделе`:"Нет базы для процента"}</small></div></div>
+        {weekTotals.previousPending!==null&&<div className={styles.weeklyBars} role="img" aria-label={`Прошлая неделя: ${weekTotals.previousPending}, текущая неделя: ${weekTotals.pending}`}><div><span>Прошлая</span><i style={{width:`${weekTotals.previousPending/Math.max(1,weekTotals.previousPending,weekTotals.pending)*100}%`}}/><b>{weekTotals.previousPending}</b></div><div><span>Текущая</span><i style={{width:`${weekTotals.pending/Math.max(1,weekTotals.previousPending,weekTotals.pending)*100}%`}}/><b>{weekTotals.pending}</b></div></div>}
+        <details className={styles.weeklyDetails} open><summary>Сравнение по контрагентам ({weekRows.length})</summary><div><table><thead><tr><th>Контрагент</th><th>{audience==="backlog"?"Рейсы TMS":"ЭТрН"}</th><th>{audience==="backlog"?"С ЭТрН":`Подписано Т${titleNumber}`}</th><th>Ожидают сейчас</th><th>Ожидали неделю назад</th><th>Изменение</th></tr></thead><tbody>{weekRows.map(row=><tr key={row.key}><td>{row.name}</td><td>{row.total}</td><td>{row.done}</td><td>{row.pending}</td><td>{row.previousPending??"—"}</td><td>{row.previousPending===null?"—":`${row.pending-row.previousPending>0?"+":""}${row.pending-row.previousPending}`}</td></tr>)}</tbody></table></div></details>
+      </section>
       <section className={styles.dynamicsCard} aria-label="Динамика документов по месяцам"><header><div><h2>{audience==="backlog"?"Динамика рейсов и ЭТрН":"Динамика ЭТрН и подписания"}</h2><p>С сентября 2026 года · значения указаны над каждым столбцом</p></div><button type="button" onClick={()=>void exportDynamics()} disabled={exporting||loading}>{exporting?"Готовим Excel…":"Скачать динамику · Excel"}</button></header><div className={styles.dynamicsLegend}><span><i className={styles.dynamicsTotalKey}/>{audience==="backlog"?"Рейсы TMS":"ЭТрН"}</span><span><i className={styles.dynamicsDoneKey}/>{audience==="backlog"?"С ЭТрН":`Подписано Т${titleNumber}`}</span></div><div className={styles.dynamicsChart}>{dynamics.map(item=><div className={styles.dynamicsMonth} key={item.month} title={`${monthName(item.month)}: всего ${item.total}, ${audience==="backlog"?"с ЭТрН":"подписано"} ${item.completed}`}><div className={styles.dynamicsColumns}><div className={styles.dynamicsColumn}><strong>{item.total}</strong><span style={{height:`${item.total/dynamicsMax*100}%`}}/></div><div className={styles.dynamicsColumn}><strong>{item.completed}</strong><span style={{height:`${item.completed/dynamicsMax*100}%`}}/></div></div><b>{monthName(item.month,true)}</b></div>)}</div></section>
       {audience!=="backlog"&&<section className={styles.charts}>
         <article className={`${styles.chartCard} ${styles.monthTotalCard}`}><header><div><small>ОБЪЁМ</small><h2>ЭТрН за {periodName}</h2></div></header><div className={styles.singleBar}><strong>{totals.total}</strong><span><i style={{height:totals.total?"100%":"0"}}/></span><small>{periodShort}</small></div></article>
@@ -116,6 +180,7 @@ export default function Statistics(){
         <article className={styles.chartCard}><header><div><small>ПОДПИСАНИЕ</small><h2>Доля подписанных · титул {titleNumber}</h2></div></header><div className={styles.donutWrap}><svg className={styles.donut} viewBox="0 0 120 120"><circle cx="60" cy="60" r="46"/><circle className={styles.donutValue} cx="60" cy="60" r="46" strokeDasharray={circumference} strokeDashoffset={circumference*(1-signedPercent/100)}/></svg><div className={styles.donutLabel}><strong>{signedPercent}%</strong><span>подписано</span></div></div><div className={styles.legend}><div><i className={styles.green}/><span>Подписано Т{titleNumber}</span><strong>{totals.signed}</strong></div><div><i className={styles.red}/><span>{audience==="carrier"?"Не подписано":"Отклонение"}</span><strong>{totals.unsigned}</strong></div></div></article>
       </section>}
       <section className={styles.carrierSection}><header><div><small>{audience==="consignee"?"ГРУЗОПОЛУЧАТЕЛИ":audience==="backlog"?"BACKLOG TMS":"ПЕРЕВОЗЧИКИ"}</small><h2>{audience==="backlog"?`Рейсы и выпуск ЭТрН за ${periodName}`:`Подписание титула ${titleNumber} за ${periodName}`}</h2><p>{audience==="backlog"?"Фактические рейсы взяты из ТТН/CMR по дате доставки на склад; рейсы без ЭТрН образуют backlog.":audience==="carrier"?"Учтены только ЭТрН с наступившей датой доставки.":"Отклонение — Т1 или Т2 подписан, дата доставки наступила, но Т3 не подписан."} Нажмите на строку для проверки реестра.</p></div><span>{audience==="backlog"?backlogRows.length:entities.length} {audience==="backlog"?(backlogMode==="carrier"?"перевозчиков":"грузополучателей"):audience==="consignee"?"грузополучателей":"перевозчиков"}</span></header>
+        {audience!=="backlog"&&<div className={styles.unsignedToolbar}><span>{totals.unsigned} ЭТрН ожидают подписи</span><button type="button" onClick={()=>void exportUnsigned()} disabled={exporting||loading||!totals.unsigned}>{exporting?"Готовим Excel…":`Выгрузить неподписанные Т${titleNumber} · Excel`}</button></div>}
         {audience==="backlog"&&<div className={styles.backlogToolbar}><div className={styles.backlogModeSwitch} role="group" aria-label="Разрез backlog"><button type="button" className={backlogMode==="carrier"?styles.on:""} aria-pressed={backlogMode==="carrier"} onClick={()=>{setBacklogMode("carrier");setExpanded(null)}}>Перевозчики</button><button type="button" className={backlogMode==="consignee"?styles.on:""} aria-pressed={backlogMode==="consignee"} onClick={()=>{setBacklogMode("consignee");setExpanded(null)}}>Грузополучатели</button></div><button type="button" className={styles.backlogExport} onClick={()=>void exportBacklog()} disabled={loading||exporting||!selectedTrips.length}>{exporting?"Готовим Excel…":"Выгрузить Excel с контейнерами"}</button></div>}
         {audience==="backlog"&&<div className={styles.backlogLayout}>
           <div className={styles.backlogCarriers}>
