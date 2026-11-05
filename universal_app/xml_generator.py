@@ -832,7 +832,7 @@ class Generator:
                 signer.remove(child)
         return file_id + ".xml", _serialize(root)
 
-    def ezz(self, ctx: dict) -> tuple[str, bytes]:
+    def ezz(self, ctx: dict, cargo_contexts: list[dict] | None = None) -> tuple[str, bytes]:
         self.fill_missing_kpp(ctx)
         root = copy.deepcopy(self.ezz_template)
         now = datetime.now()
@@ -892,8 +892,14 @@ class Generator:
                 "ИННВладИнфр": clean(loading_owner["inn"]),
             })
         cargo = info.find("ОпГруз")
-        cargo.set("НаимГруз", ctx["cargo_name"] if ctx.get("transport_mode") == "non_container" else f"Контейнер {ctx['container']}")
-        cargo.find("МасГруз").set("МасБрутЗнач", ctx["weight"])
+        cargo_template = copy.deepcopy(cargo)
+        cargo_index = list(info).index(cargo)
+        info.remove(cargo)
+        for offset, item in enumerate(cargo_contexts or [ctx]):
+            cargo = copy.deepcopy(cargo_template)
+            cargo.set("НаимГруз", item["cargo_name"] if item.get("transport_mode") == "non_container" else f"Контейнер {item['container']}")
+            cargo.find("МасГруз").set("МасБрутЗнач", item["weight"])
+            info.insert(cargo_index + offset, cargo)
         if ctx.get("transport_mode") == "non_container":
             vehicle_part = info.find("ПарТСПрвз")
             if vehicle_part is not None:

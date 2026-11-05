@@ -100,6 +100,9 @@ export default function Workspace() {
   const [pointsSource, setPointsSource] = useState<Source | null>(null);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Trip[]>([]);
+  const [multiOrderSelection,setMultiOrderSelection]=useState(false);
+  const [multiOrderKeys,setMultiOrderKeys]=useState<string[]>([]);
+  const [multiOrderNumber,setMultiOrderNumber]=useState("");
   const [selectedDocs,setSelectedDocs]=useState<Record<string,DocumentKind>>({});
   const [transportModes,setTransportModes]=useState<Record<string,TransportMode>>({});
   const [cargoNames,setCargoNames]=useState<Record<string,string>>({});
@@ -315,7 +318,7 @@ export default function Workspace() {
     const containers = Array.from(new Set(query.split(/[\n,;]+/).map(item=>normalizeContainer(item)||item.trim().toUpperCase()).filter(Boolean)));
     if (!containers.length) return setMessage("Укажите номера контейнеров или номера записей ТТН/CMR");
     setBusy(true);setMessage("Ищем перевозки в сохранённых данных TMS…");
-    try{const response=await fetch("/api/trips/search",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({containers,user:employee.trim()||"Пользователь"})});const result=await response.json();if(!response.ok)throw new Error(result.error||"Не удалось выполнить поиск");const found:Trip[]=(result.items||[]).map((item:{container:string;recordId:string;recordCount:number;cargo?:Row;auto?:Row;missingCargo:boolean;missingAuto:boolean;transportMode?:TransportMode|null})=>({...item.cargo,...item.auto,_container:item.container,_recordId:item.recordId,_recordCount:item.recordCount,_key:`${item.container}#${item.recordId}`,_cargo:item.cargo,_auto:item.auto,_missingCargo:item.missingCargo,_missingAuto:item.missingAuto,_transportMode:item.transportMode} as Trip));setResults(found);void loadEdoChoices(found);void checkDocumentPresence([...new Set<string>(found.filter(item=>item._transportMode!=="non_container"&&/^[A-Z]{4}\d{7}$/.test(item._container)).map(item=>item._container))]);setMessage('Найдено перевозок: '+found.filter(item=>!item._missingAuto&&(!item._missingCargo||item._transportMode==="non_container")).length+' для '+containers.length+' запросов');}catch(error){setMessage(error instanceof Error?error.message:"Не удалось выполнить поиск");}finally{setBusy(false);}
+    try{const response=await fetch("/api/trips/search",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({containers,user:employee.trim()||"Пользователь"})});const result=await response.json();if(!response.ok)throw new Error(result.error||"Не удалось выполнить поиск");const found:Trip[]=(result.items||[]).map((item:{container:string;recordId:string;recordCount:number;cargo?:Row;auto?:Row;missingCargo:boolean;missingAuto:boolean;transportMode?:TransportMode|null})=>({...item.cargo,...item.auto,_container:item.container,_recordId:item.recordId,_recordCount:item.recordCount,_key:`${item.container}#${item.recordId}`,_cargo:item.cargo,_auto:item.auto,_missingCargo:item.missingCargo,_missingAuto:item.missingAuto,_transportMode:item.transportMode} as Trip));setResults(found);setMultiOrderKeys([]);void loadEdoChoices(found);void checkDocumentPresence([...new Set<string>(found.filter(item=>item._transportMode!=="non_container"&&/^[A-Z]{4}\d{7}$/.test(item._container)).map(item=>item._container))]);setMessage('Найдено перевозок: '+found.filter(item=>!item._missingAuto&&(!item._missingCargo||item._transportMode==="non_container")).length+' для '+containers.length+' запросов');}catch(error){setMessage(error instanceof Error?error.message:"Не удалось выполнить поиск");}finally{setBusy(false);}
   };
 
   const checkDocumentPresence=async(containers:string[])=>{
@@ -343,7 +346,7 @@ export default function Workspace() {
     }
     return handle;
   };
-  const prepareDocument = async (trip: Trip, kind: DocumentKind) => {
+  const prepareDocument = async (trip: Trip, kind: DocumentKind, multiTrips?:Trip[], sharedOrderNumber?:string) => {
     if (!employee.trim()) throw new Error("Укажите сотрудника, который формирует документ");
     const transportMode=modeForTrip(trip);
     if(!transportMode)throw new Error("Выберите тип перевозки в карточке TMS");
@@ -361,7 +364,7 @@ export default function Workspace() {
     }
     const row = { ...(trip._cargo ?? {}), ...(trip._auto ?? {}) };
       const requestDocument = async (confirmWarnings = false,choice?:Exclude<WarningChoice,null>) => {
-        const response = await fetch("/api/generate", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({kind,container:trip._container,recordId:trip._recordId,transportMode,cargoName,row,date:new Date().toISOString().slice(0,10),user:employee.trim(),confirmWarnings,manualValues:choice?.manualValues,saveManualValues:choice?.saveManualValues}) });
+        const response = await fetch("/api/generate", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({kind,container:trip._container,recordId:trip._recordId,transportMode,cargoName,row,date:new Date().toISOString().slice(0,10),user:employee.trim(),confirmWarnings,manualValues:choice?.manualValues,saveManualValues:choice?.saveManualValues,...(multiTrips?.length?{action:"order_multi",items:multiTrips.map(item=>({container:item._container,recordId:item._recordId})),orderNumber:sharedOrderNumber}:{})}) });
         return {response,result:await response.json()};
       };
       let {response,result} = await requestDocument();
@@ -377,16 +380,16 @@ export default function Workspace() {
       return result as {content:string;filename:string;recipientBoxId?:string};
   };
 
-  const generateDocument = async (trip: Trip, kind: DocumentKind, quiet = false) => {
-    const key = trip._key + kind;
+  const generateDocument = async (trip: Trip, kind: DocumentKind, quiet = false, multiTrips?:Trip[], sharedOrderNumber?:string) => {
+    const key = multiTrips?.length?"multi-order":trip._key + kind;
     setDocStatuses((current)=>({...current,[key]:{state:"working",text:"Формируется…"}}));
     if (!quiet) { setGenerating(key); setMessage("Формируем документ для " + trip._container + "…"); }
     try {
-      const result=await prepareDocument(trip,kind);
+      const result=await prepareDocument(trip,kind,multiTrips,sharedOrderNumber);
       const bytes = Uint8Array.from(atob(result.content), (char) => char.charCodeAt(0));
       const blob = new Blob([bytes], {type:"application/xml"});
       if (outputRef.current) {
-        const containerFolder = containerFoldersRef.current[trip._container] ?? await outputRef.current.getDirectoryHandle(modeForTrip(trip)==="non_container"?trip._recordId:trip._container, {create:true});
+        const containerFolder = multiTrips?.length?outputRef.current:containerFoldersRef.current[trip._container] ?? await outputRef.current.getDirectoryHandle(modeForTrip(trip)==="non_container"?trip._recordId:trip._container, {create:true});
         const file = await containerFolder.getFileHandle(result.filename, {create:true});
         const writable = await file.createWritable(); await writable.write(blob); await writable.close();
       } else {
@@ -399,16 +402,16 @@ export default function Workspace() {
     finally { if (!quiet) setGenerating(""); }
   };
 
-  const sendToKontur = async (trip:Trip,kind:DocumentKind) => {
+  const sendToKontur = async (trip:Trip,kind:DocumentKind,multiTrips?:Trip[],sharedOrderNumber?:string) => {
     if(kind==="forwarding") {setMessage(forwardingDraftDisabledMessage);return;}
-    const key=trip._key+kind;
+    const key=multiTrips?.length?"multi-order":trip._key+kind;
     const documentTitle=documentKinds.find(item=>item.kind===kind)?.title||kind;
     let currentStep:TransferStepKey="xml";
     const updateStep=(step:TransferStepKey,state:TransferStepState,message:string)=>setKonturTransfer(current=>({...current,steps:{...current.steps,[step]:{state,message}}}));
     setKonturStatuses(current=>({...current,[key]:{state:"working",text:"Передаём…"}}));
     setKonturTransfer({open:true,busy:true,container:trip._container,documentTitle,summary:"Подготавливаем документ для передачи",steps:{...emptyKonturTransferSteps(),xml:{state:"working",message:"Формируем XML из данных TMS и справочников"}}});
     try {
-      const document=await prepareDocument(trip,kind);
+      const document=await prepareDocument(trip,kind,multiTrips,sharedOrderNumber);
       updateStep("xml","saved",`XML сформирован: ${document.filename}`);
 
       currentStep="connection"; updateStep("connection","working","Проверяем авторизацию и доступ к ящику Контур");
@@ -439,7 +442,7 @@ export default function Workspace() {
       setKonturTransfer(current=>({...current,busy:false,summary:"Черновик успешно создан в Контур.Логистике"}));
       setKonturStatuses(current=>({...current,[key]:{state:"saved",text:"Черновик создан"}}));
       setMessage(`Черновик ${document.filename} создан в Контур.Логистике`);
-      if(modeForTrip(trip)==="container"&&/^[A-Z]{4}\d{7}$/.test(trip._container))void checkDocumentPresence([trip._container]);
+      if(modeForTrip(trip)==="container"&&/^[A-Z]{4}\d{7}$/.test(trip._container))void checkDocumentPresence(multiTrips?.length?multiTrips.map(item=>item._container):[trip._container]);
     } catch(error) {
       const text=error instanceof DOMException&&error.name==="AbortError"?"Превышено время ожидания ответа. Проверьте доступность сервера и повторите передачу.":error instanceof Error?error.message:"Ошибка передачи в Контур";
       updateStep(currentStep,"error",text);
@@ -490,6 +493,12 @@ export default function Workspace() {
   const updatedLabel=(value?:string)=>value?`Обновлены ${new Date(value).toLocaleString("ru-RU")}`:"Данные ещё не обновлялись";
   const tmsSearchStatus=tmsBusy?`Обновляем данные TMS · ${tmsProgressValue}%`:restoreProgress.active?`Загружаем сохранённые данные TMS · ${tmsProgressValue}%`:ready?`Данные TMS готовы · ${updatedLabel(tmsUpdatedAt)}`:"Данные TMS не загружены. Обновите их в «Настройках».";
 
+  const multiOrderTrips=results.filter(trip=>multiOrderKeys.includes(trip._key));
+  const generatedOrderNumber=multiOrderNumber.trim()||`${new Date().toLocaleDateString("sv-SE",{timeZone:"Europe/Moscow"}).replaceAll("-","")}-${multiOrderTrips[0]?._container||"GROUP"}-G${multiOrderTrips.length}`;
+  const canSelectForOrder=(trip:Trip)=>{
+    const state=edoChoices[trip._key];
+    return modeForTrip(trip)==="container"&&!trip._missingAuto&&!trip._missingCargo&&!multiOrderTrips.some(item=>item._container===trip._container&&item._key!==trip._key)&&Boolean(state&&!state.loading&&!state.error&&state.parties.length&&state.parties.every(party=>party.selectedId));
+  };
   const renderTripCard=(trip:Trip)=>{
     const cargo=trip._cargo,auto=trip._auto,container=trip._container,recordKey=trip._key;
     const clientName=value(cargo,"Клиент")||value(auto,"Клиент")||"—";
@@ -542,6 +551,7 @@ export default function Workspace() {
     };
     return <article className={styles.tripCard} key={recordKey}>
       <header className={styles.tripCardHead}>
+        {multiOrderSelection&&<label className={styles.multiOrderPick} title={canSelectForOrder(trip)?"Добавить в общую заявку":"Для выбора нужны данные TMS и ID ЭДО"}><input type="checkbox" checked={multiOrderKeys.includes(recordKey)} disabled={!canSelectForOrder(trip)} onChange={event=>setMultiOrderKeys(current=>event.target.checked?[...current,recordKey]:current.filter(key=>key!==recordKey))}/><span>В общую заявку</span></label>}
         <div><small>{nonContainer?"ЗАПИСЬ ТТН / CMR":"КОНТЕЙНЕР / НОМЕР"}</small><strong>{nonContainer?trip._recordId:container}</strong>{trip._recordCount>1&&<small>ТТН/CMR № {trip._recordId} · {trip._recordCount} записи</small>}</div>
         <div><small>ГРУЗОПОЛУЧАТЕЛЬ</small><strong>{consigneeName}</strong></div>
         <div className={styles.tripBadges}>{availableKinds.map(item=><span key={item.kind} title={nonContainer?undefined:(item.kind==="forwarding"&&documentPresence[container]?.forwardingError)||documentPresence[container]?.error||undefined} className={item.kind==="forwarding"&&documentPresence[container]?.forwardingError?styles.tripBadgeError:konturStatuses[recordKey+item.kind]?.state==="saved"||(!nonContainer&&documentPresence[container]?.found?.[item.kind])?styles.tripBadgeReady:styles.tripBadgePending}>{({cargo:"ЭТрН",order:"Заявка",empty:"ЭТрН пор.",forwarding:"ПЭ"} as Record<DocumentKind,string>)[item.kind]} — {statusText(item.kind)}</span>)}{!nonContainer&&<button disabled={!kontur.connected||documentPresence[container]?.checking} onClick={()=>void checkDocumentPresence([container])}>Проверить в Контуре</button>}</div>
@@ -584,6 +594,8 @@ export default function Workspace() {
 
         <section className={styles.search}><label><strong>Контейнеры или номера записей ТТН/CMR</strong><textarea value={query} onChange={(event) => setQuery(event.target.value)} placeholder={'WEDU8636223\n123456'} autoFocus/></label><div className={styles.searchActions}><button onClick={search} disabled={!ready||busy}>Найти перевозки →</button><small aria-live="polite" role="status">{tmsSearchStatus}</small></div></section>
       {ready && <>
+        {results.length>0&&<section className={styles.multiOrderBar}><div><strong>Одна заявка на несколько контейнеров</strong><small>Отметьте перевозки с одинаковыми маршрутом, перевозчиком и датами. В XML каждый контейнер будет отдельным грузом со своим весом.</small></div><button type="button" onClick={()=>{setMultiOrderSelection(current=>!current);setMultiOrderKeys([]);setMultiOrderNumber("");}}>{multiOrderSelection?"Закрыть выбор":"Выбрать контейнеры"}</button></section>}
+        {multiOrderSelection&&<section className={styles.multiOrderPanel} aria-label="Общая заявка перевозчику"><div className={styles.multiOrderHeading}><h2>Общая заявка · {multiOrderTrips.length} контейнеров</h2><span>Можно выбрать от 2 до 20 контейнеров</span></div>{multiOrderTrips.length>0&&<><p><b>Маршрут:</b> {value(multiOrderTrips[0]._auto,"Маршрут")||"—"}</p><div className={styles.multiOrderItems}>{multiOrderTrips.map(item=><div key={item._key}><strong>{item._container}</strong><span>ТТН/CMR № {item._recordId}</span><span>Вес брутто: {value({...item._cargo,...item._auto},"Вес брутто")||"не указан"} кг</span><button type="button" onClick={()=>setMultiOrderKeys(current=>current.filter(key=>key!==item._key))} aria-label={`Убрать ${item._container}`}>×</button></div>)}</div><label className={styles.multiOrderNumber}>Номер заявки<input value={multiOrderNumber} onChange={event=>setMultiOrderNumber(event.target.value)} placeholder={generatedOrderNumber}/></label></>}{multiOrderTrips.length<2?<p>Выберите хотя бы два контейнера в карточках перевозок.</p>:<p>Общие поля сверяются по данным TMS. При различиях сервис покажет причину и не сформирует документ.</p>}<div className={styles.multiOrderActions}><button type="button" disabled={multiOrderTrips.length<2||multiOrderTrips.length>20||Boolean(generating)||!employee.trim()} onClick={()=>void generateDocument(multiOrderTrips[0],"order",false,multiOrderTrips,generatedOrderNumber)}>Скачать одну заявку XML</button><button type="button" disabled={multiOrderTrips.length<2||multiOrderTrips.length>20||Boolean(generating)||!employee.trim()||!kontur.connected||konturStatuses["multi-order"]?.state==="working"} onClick={()=>void sendToKontur(multiOrderTrips[0],"order",multiOrderTrips,generatedOrderNumber)}>Создать черновик в Контуре</button></div></section>}
         {results.length>0&&<section className={styles.tripCards} aria-label="Найденные перевозки"><div className={styles.tripCardsTitle}><h2>Найденные перевозки</h2><small>Все сведения прежней таблицы находятся в карточках</small></div>{results.map(renderTripCard)}</section>}
         {results.length > 0 && <><section className={styles.bulkBar}><div><strong>Скачать XML документов</strong><small>{outputFolder ? "Папка: " + outputFolder : "Выберите папку для сохранения XML. Передача в Контур выполняется отдельными кнопками «Контур»."}</small></div><div className={styles.employeeField}><label htmlFor="employee-xml">Сотрудник для XML</label><input id="employee-xml" list="employee-options" value={employee} onChange={event=>setEmployee(event.target.value)} placeholder="Введите ФИО или выберите из списка" autoComplete="off"/><datalist id="employee-options">{employees.map(name=><option key={name} value={name}/>)}</datalist><button type="button" onClick={()=>void saveEmployee()} disabled={savingEmployee||!employee.trim()||employees.some(name=>name.toLocaleLowerCase("ru")===employee.trim().replace(/\s+/g," ").toLocaleLowerCase("ru"))}>{savingEmployee?"Сохраняем…":"Добавить в справочник"}</button><small>Выбранное ФИО попадёт в XML как работник погрузки и подписант. Добавление сохраняет его для следующих документов.</small></div><button className={styles.folderButton} onClick={chooseOutputFolder}>Выбрать папку</button><button className={styles.bulkButton} disabled={Boolean(generating)||results.some(trip=>{const state=edoChoices[trip._key];return !state||state.loading||Boolean(state.error)||!state.parties.length||state.parties.some(party=>!party.selectedId);})} onClick={generateAll}>{generating === "all" ? (bulkProgress || "Формируем…") : "Скачать все XML"}</button></section><section className={styles.results}><div className={styles.tableWrap}><table><thead><tr><th>Статус</th><th>Документы</th><th>Статус ЭДО ЭТрН</th><th>Контейнер</th><th>Клиент / грузополучатель</th><th>Перевозчик</th><th>Маршрут и адреса</th><th>Погрузка / выгрузка</th><th>Контейнерный сток</th><th>Водитель и ТС</th></tr></thead><tbody>{results.map((trip) => {
           const cargo = trip._cargo; const auto = trip._auto;

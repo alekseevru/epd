@@ -1,6 +1,7 @@
 from pathlib import Path
 import re
 import uuid
+from decimal import Decimal, InvalidOperation
 import xml.etree.ElementTree as ET
 
 from xml_generator import Generator as BaseGenerator, TAGLEX, address_attributes, vehicle_ownership_details
@@ -96,6 +97,41 @@ class Generator(BaseGenerator):
     def ezz(self, ctx):
         self._validate(ctx, ezz=True)
         return super().ezz(ctx)
+
+    def ezz_multi(self, contexts):
+        if len(contexts) < 2:
+            raise ValueError("Для общей заявки выберите не менее двух контейнеров")
+        for ctx in contexts:
+            self._validate(ctx, ezz=True)
+        self.validate_ezz_group(contexts)
+        return super().ezz(contexts[0], contexts)
+
+    @staticmethod
+    def validate_ezz_group(contexts):
+        fields = {
+            "перевозчик": lambda c: (c["carrier"].get("inn"), c["carrier_edo"]),
+            "заказчик": lambda c: (c["client"].get("inn"), c["client_edo"]),
+            "маршрут и адреса": lambda c: (c["loading"], c["delivery"]),
+            "время погрузки и выгрузки": lambda c: (c["planned_departure_datetime"], c["planned_arrival_datetime"]),
+            "договор с перевозчиком": lambda c: c.get("carrier_contract"),
+            "владелец пункта погрузки": lambda c: c.get("loading_owner"),
+            "тип перевозки": lambda c: c.get("transport_mode"),
+            "тип кузова": lambda c: c.get("body_type"),
+            "номер заявки": lambda c: c.get("order_number"),
+        }
+        reference = contexts[0]
+        for ctx in contexts[1:]:
+            for label, value in fields.items():
+                if value(ctx) != value(reference):
+                    raise ValueError(f"Нельзя объединить {reference['container']} и {ctx['container']}: различается {label}.")
+        for ctx in contexts:
+            try:
+                weight = Decimal(str(ctx.get("weight") or "").replace(" ", "").replace("\u00a0", "").replace(",", "."))
+            except InvalidOperation:
+                raise ValueError(f"Не указан корректный вес для {ctx['container']}") from None
+            if not weight.is_finite() or weight <= 0:
+                raise ValueError(f"Вес контейнера {ctx['container']} должен быть больше нуля")
+            ctx["weight"] = format(weight, "f")
 
     @staticmethod
     def forwarding_order_userdata(contexts, signer_name, direction="client_to_taglex"):
