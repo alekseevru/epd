@@ -119,7 +119,8 @@ const contractFieldCandidates = {
 
 const autoFields = {
   ID: "Номер записи",
-  CREATE_DATE: "Дата создания строки",
+  DT_CREATE: "Дата создания строки",
+  DT_UPDATE: "Дата обновления строки",
   ID_OPERATION_TYPE: "Тип операции",
   UNITS_NUMBERS: "Номера грузовых единиц",
   DOC_PARENT_ORDER_COMPANY_CLIENT_NAME: "Клиент",
@@ -235,12 +236,12 @@ async function fetchTmsTable(url,options) {
   return response;
 }
 
-async function getRows(session, table, fields, filters, createdSince = "", onProgress = () => {}) {
+export async function getRows(session, table, fields, filters, createdSince = "", onProgress = () => {}) {
   const keys = Object.keys(fields);
   const minimumCreatedAt = createdSince ? Date.parse(createdSince + "T00:00:00Z") : NaN;
   const all = [];
   const pageSize = table === "OPERATION_SUB_DOC" ? 1000 : table === "OPERATION_UNIT" ? 2000 : 4000;
-  const maxRows = ({OPERATION_UNIT:16000,OPERATION_SUB_DOC:24000,LIST_COMPANY:50000,LIST_AUTO:50000,LIST_DRIVERS:50000,LIST_WAREHOUSE:50000})[table] || 50000;
+  const maxRows = ({OPERATION_UNIT:16000,OPERATION_SUB_DOC:250000,LIST_COMPANY:50000,LIST_AUTO:50000,LIST_DRIVERS:50000,LIST_WAREHOUSE:50000})[table] || 50000;
   for (let offset = 0; offset < maxRows; offset += pageSize) {
     const data = { viewedFields: keys, offset, limit: pageSize, sort: [{ ID: -1 }], ...(filters ? { filters } : {}) };
     const body = new URLSearchParams({ json: JSON.stringify(data) });
@@ -273,7 +274,9 @@ async function getRows(session, table, fields, filters, createdSince = "", onPro
       keys.forEach((key, index) => { row[fields[key]] = values[index] ?? ""; });
       if (table === "OPERATION_SUB_DOC" && String(row["Тип операции"]) !== "1") continue;
       const createdAt = tmsDateTimestamp(row["Дата создания строки"]);
-      if (Number.isFinite(minimumCreatedAt) && Number.isFinite(createdAt) && createdAt < minimumCreatedAt) continue;
+      const updatedAt = tmsDateTimestamp(row["Дата обновления строки"]);
+      const latestAt = Number.isFinite(updatedAt) ? updatedAt : createdAt;
+      if (Number.isFinite(minimumCreatedAt) && Number.isFinite(latestAt) && latestAt < minimumCreatedAt) continue;
       const route = String(row["Маршрут"] || "");
       const points = route.split(/\s*(?:->|→|—>)\s*/);
       row["Место отправления"] = points[0] || "";
@@ -284,6 +287,7 @@ async function getRows(session, table, fields, filters, createdSince = "", onPro
     }
     onProgress(all.length,`Получено ${all.length.toLocaleString("ru-RU")} строк`,Math.min(95,Math.max(5,Math.round(all.length/maxRows*95))));
     if (json.result.rows.length < pageSize) break;
+    if (offset + pageSize >= maxRows) throw new Error(`TMS вернула не менее ${maxRows} строк ${table}: обновление остановлено, чтобы не сохранять неполный справочник`);
   }
   return all;
 }
@@ -415,10 +419,10 @@ function mergeTransportCache(target,table,rows) {
   return result;
 }
 
-export async function refreshTmsContainers({login:loginName,password,cacheDir,containers}) {
+export async function refreshTmsContainers({login:loginName,password,captcha="",cacheDir,containers}) {
   const requested=[...new Set((containers||[]).map(value=>cleanText(value).toUpperCase()).filter(Boolean))];
   if(!requested.length)return {cargo:0,auto:0};
-  const session=await login(loginName,password);const cargoRows=[],autoRows=[];
+  const session=await login(loginName,password,captcha);const cargoRows=[],autoRows=[];
   for(const container of requested){
     const cargoFilter={tryNewFilterFormat:true,value:[["UNIT_NUMBER","=",container]]};
     const autoFilter={tryNewFilterFormat:true,value:[["ID_OPERATION_TYPE","=",1],["UNITS_NUMBERS","=",container]]};
@@ -427,7 +431,7 @@ export async function refreshTmsContainers({login:loginName,password,cacheDir,co
   }
   if(cargoRows.length)mergeTransportCache(path.join(cacheDir,"cargo.xlsx"),"OPERATION_UNIT",cargoRows);
   if(autoRows.length)mergeTransportCache(path.join(cacheDir,"auto.xlsx"),"OPERATION_SUB_DOC",autoRows);
-  return {cargo:cargoRows.length,auto:autoRows.length};
+  return {cargo:cargoRows.length,auto:autoRows.length,records:autoRows.map(row=>({id:cleanText(row["Номер записи"]),container:cleanText(row["Номера грузовых единиц"]),carrier:cleanText(row["Исполнитель"])}))};
 }
 
 export async function syncTms({ login: loginName, password, captcha = "", cacheDir, referenceDir, onStatus = () => {} }) {
