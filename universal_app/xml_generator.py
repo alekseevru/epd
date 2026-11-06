@@ -543,7 +543,9 @@ class Generator:
         consignee_inn_match = re.search(r"\bИНН\s*[:№-]?\s*(\d{10}|\d{12})\b", consignee_text, flags=re.IGNORECASE)
         consignee_inn = consignee_inn_match.group(1) if consignee_inn_match else ""
         consignee_name = clean(re.sub(r"\s+ИНН\s*[:№-]?\s*\d{10,12}\b.*$", "", consignee_text, flags=re.IGNORECASE)) if explicit_consignee else client_name
-        carrier_name = clean(value(row, "Исполнитель", "Партнер", "Перевозчик"))
+        # В ТТН/CMR перевозчик указан в «Исполнитель». «Партнер» — другая роль
+        # и не должен подменять перевозчика, даже если исполнитель пока пуст.
+        carrier_name = clean(value(row, "Исполнитель"))
         order_shipper_name = clean(value(row, "Грузоотправитель из заказа"))
         client_company = self.catalogs.company(client_name)
         consignee_company = self.catalogs.company(consignee_text or consignee_name, inn=consignee_inn)
