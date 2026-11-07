@@ -129,4 +129,3 @@
 .tripCard .tripEdo>div.tripEdoMissing{border-color:#e88980;background:#fff1ef;box-shadow:inset 3px 0 #d94f45}
 .tripCard .tripEdo .tripEdoMissing em,.tripCard .tripEdo .tripEdoMissing>small{color:#a52e28;font-weight:700}
 .tripCard .tripEdo .tripEdoMissing select{border-color:#d9766e;color:#8f2923}
-.carrierRefresh{display:flex;align-items:center;flex-wrap:wrap;gap:9px;margin:0 0 12px;padding:10px 12px;border:1px solid #e88980;border-radius:9px;background:#fff1ef;color:#8f2923;font-size:12px}.carrierRefresh button{width:auto;min-height:30px;padding:5px 10px;border:1px solid #c64c43;border-radius:7px;background:#fff;color:#8f2923;font-weight:700}.carrierRefresh button:disabled{opacity:.55}
