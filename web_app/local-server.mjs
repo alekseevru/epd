@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import * as XLSX from "xlsx";
-import { syncTms, contractRowsToCatalog, generateTmsCaptcha, TmsCaptchaError } from "./tms-sync.mjs";
+import { syncTms, refreshTmsContainers, contractRowsToCatalog, generateTmsCaptcha, TmsCaptchaError } from "./tms-sync.mjs";
 import { isTmsApiConfigured, resolveTmsCredentials } from "./tms-credentials.mjs";
 import { konturDocumentUrl, logisticsIdFromCustomData, verifiedForwardingUrl } from "./kontur-document-links.mjs";
 import { assertDraftTransferAllowed, draftMessageToPost, savedDraftDocument } from "./kontur-draft.mjs";
@@ -714,6 +714,17 @@ const server = http.createServer((request, response) => {
       let result=await sendGeneratorRequest({...payload,action:"search_trips"});if(result.error)throw new Error(result.error);
       response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify(result));
     }catch(error){response.writeHead(400,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({error:error.message||"Не удалось выполнить поиск"}));}})());return;
+  }
+  if (request.method === "POST" && url.pathname === "/api/trips/refresh-history") {
+    let body="";request.setEncoding("utf8");request.on("data",chunk=>body+=chunk);request.on("end",()=>void(async()=>{try{
+      const payload=JSON.parse(body||"{}");const container=String(payload.container||"").trim().toUpperCase();
+      if(!/^[A-Z]{4}\d{7}$/.test(container))throw new Error("Укажите номер контейнера для загрузки истории TMS");
+      const credentials=resolveTmsCredentials(payload);
+      const result=await refreshTmsContainers({...credentials,cacheDir:cacheRoot,containers:[container]});
+      if(!result.auto)throw new Error(`TMS не вернула записи ТТН/CMR для ${container}`);
+      restartGeneratorWorker();
+      response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify(result));
+    }catch(error){response.writeHead(400,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify({error:error.message||"Не удалось загрузить историю контейнера"}));}})());return;
   }
   if (request.method === "GET" && url.pathname === "/api/orders/search") {
     void(async()=>{try{

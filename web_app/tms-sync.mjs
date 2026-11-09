@@ -119,7 +119,7 @@ const contractFieldCandidates = {
 
 const autoFields = {
   ID: "Номер записи",
-  CREATE_DATE: "Дата создания строки",
+  DT_CREATE: "Дата создания строки",
   ID_OPERATION_TYPE: "Тип операции",
   UNITS_NUMBERS: "Номера грузовых единиц",
   DOC_PARENT_ORDER_COMPANY_CLIENT_NAME: "Клиент",
@@ -415,10 +415,10 @@ function mergeTransportCache(target,table,rows) {
   return result;
 }
 
-export async function refreshTmsContainers({login:loginName,password,cacheDir,containers}) {
+export async function refreshTmsContainers({login:loginName,password,captcha="",cacheDir,containers}) {
   const requested=[...new Set((containers||[]).map(value=>cleanText(value).toUpperCase()).filter(Boolean))];
   if(!requested.length)return {cargo:0,auto:0};
-  const session=await login(loginName,password);const cargoRows=[],autoRows=[];
+  const session=await login(loginName,password,captcha);const cargoRows=[],autoRows=[];
   for(const container of requested){
     const cargoFilter={tryNewFilterFormat:true,value:[["UNIT_NUMBER","=",container]]};
     const autoFilter={tryNewFilterFormat:true,value:[["ID_OPERATION_TYPE","=",1],["UNITS_NUMBERS","=",container]]};
@@ -427,7 +427,7 @@ export async function refreshTmsContainers({login:loginName,password,cacheDir,co
   }
   if(cargoRows.length)mergeTransportCache(path.join(cacheDir,"cargo.xlsx"),"OPERATION_UNIT",cargoRows);
   if(autoRows.length)mergeTransportCache(path.join(cacheDir,"auto.xlsx"),"OPERATION_SUB_DOC",autoRows);
-  return {cargo:cargoRows.length,auto:autoRows.length};
+  return {cargo:cargoRows.length,auto:autoRows.length,records:autoRows.map(row=>({id:cleanText(row["Номер записи"]),carrier:cleanText(row["Исполнитель"]),createdAt:cleanText(row["Дата создания строки"])}))};
 }
 
 export async function syncTms({ login: loginName, password, captcha = "", cacheDir, referenceDir, onStatus = () => {} }) {
