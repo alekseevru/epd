@@ -114,6 +114,7 @@ export default function Workspace() {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [historyBusy,setHistoryBusy]=useState(false);
+  const [historyError,setHistoryError]=useState<Record<string,string>>({});
   const [recentContainers,setRecentContainers]=useState<string[]>([]);
   const [historyDialog,setHistoryDialog]=useState<{container:string;options:Trip[];selectedKey:string}|null>(null);
   const [chosenHistory,setChosenHistory]=useState<Record<string,string>>({});
@@ -330,6 +331,7 @@ export default function Workspace() {
   };
   const refreshContainerHistory=async(container:string)=>{
     if(!/^[A-Z]{4}\d{7}$/.test(container))return setMessage("Историю можно загрузить только для одного контейнера.");
+    setHistoryError(current=>({...current,[container]:""}));
     setHistoryBusy(true);setMessage(`Запрашиваем все ТТН/CMR для ${container} без ограничения по дате…`);
     try{
       const credentials=tmsUsePersonal?{mode:"personal",login:tmsLogin,password:tmsPassword,captcha:tmsCaptcha}:{mode:"api"};
@@ -342,7 +344,7 @@ export default function Workspace() {
       if(!options.length)throw new Error("Записи TMS загружены, но не найдены в карточке. Повторите поиск контейнера.");
       setHistoryDialog({container,options,selectedKey:""});
       setMessage(`Найдено ${options.length} операций ТТН/CMR для ${container}. Выберите нужную запись.`);
-    }catch(error){setMessage(error instanceof Error?error.message:"Не удалось загрузить историю TMS");}
+    }catch(error){const detail=error instanceof Error?error.message:"Не удалось загрузить историю TMS";setMessage(detail);setHistoryError(current=>({...current,[container]:detail}));}
     finally{setHistoryBusy(false);}
   };
   const applyHistoryChoice=()=>{
@@ -592,7 +594,7 @@ export default function Workspace() {
         {multiOrderSelection&&<label className={styles.multiOrderPick} title={canSelectForOrder(trip)?"Добавить в общую заявку":"Для выбора нужны данные TMS и ID ЭДО"}><input type="checkbox" checked={multiOrderKeys.includes(recordKey)} disabled={!canSelectForOrder(trip)} onChange={event=>setMultiOrderKeys(current=>event.target.checked?[...current,recordKey]:current.filter(key=>key!==recordKey))}/><span>В общую заявку</span></label>}
         <div><small>{nonContainer?"ЗАПИСЬ ТТН / CMR":"КОНТЕЙНЕР / НОМЕР"}</small><strong>{nonContainer?trip._recordId:container}</strong>{trip._recordCount>1&&<small>ТТН/CMR № {trip._recordId} · {trip._recordCount} записи</small>}{chosenHistory[container]===trip._recordId&&<small className={styles.chosenHistory}>Выбрана для документов</small>}{value(auto,"Дата создания строки")&&<small>Создана {formatTmsDate(value(auto,"Дата создания строки"))}</small>}</div>
         <div><small>ГРУЗОПОЛУЧАТЕЛЬ</small><strong>{consigneeName}</strong></div>
-        <button type="button" className={styles.tripHistoryButton} disabled={historyBusy||busy} onClick={()=>void refreshContainerHistory(container)}>{historyBusy?"Загружаем историю…":"История TMS · выбрать операцию"}</button>
+        <div className={styles.tripHistoryAction}><button type="button" className={styles.tripHistoryButton} disabled={historyBusy||busy} onClick={()=>void refreshContainerHistory(container)}>{historyBusy?"Загружаем историю…":"История TMS · выбрать операцию"}</button>{historyError[container]&&<small role="alert" className={styles.edoError}>{historyError[container]}</small>}</div>
         <div className={styles.tripBadges}>{availableKinds.map(item=><span key={item.kind} title={nonContainer?undefined:(item.kind==="forwarding"&&documentPresence[container]?.forwardingError)||documentPresence[container]?.error||undefined} className={item.kind==="forwarding"&&documentPresence[container]?.forwardingError?styles.tripBadgeError:konturStatuses[recordKey+item.kind]?.state==="saved"||(!nonContainer&&documentPresence[container]?.found?.[item.kind])?styles.tripBadgeReady:styles.tripBadgePending}>{({cargo:"ЭТрН",order:"Заявка",empty:"ЭТрН пор.",forwarding:"ПЭ"} as Record<DocumentKind,string>)[item.kind]} — {statusText(item.kind)}</span>)}{!nonContainer&&<button disabled={!kontur.connected||documentPresence[container]?.checking} onClick={()=>void checkDocumentPresence([container])}>Проверить в Контуре</button>}</div>
       </header>
       <div className={styles.tripCardBody}>

@@ -422,8 +422,28 @@ export async function refreshTmsContainers({login:loginName,password,captcha="",
   for(const container of requested){
     const cargoFilter={tryNewFilterFormat:true,value:[["UNIT_NUMBER","=",container]]};
     const autoFilter={tryNewFilterFormat:true,value:[["ID_OPERATION_TYPE","=",1],["UNITS_NUMBERS","=",container]]};
-    cargoRows.push(...await getCargoRows(session,cargoFilter,"",()=>{}));
-    autoRows.push(...await getAutoRows(session,autoFilter,"",()=>{}));
+    let rows;
+    try {
+      rows=await getAutoRows(session,autoFilter,"",()=>{});
+    } catch(error) {
+      // UNITS_NUMBERS is displayed by TMS but is not filterable in every installation.
+      // Existing record IDs allow a small, date-independent lookup of this container.
+      let cached=[];
+      try { cached=JSON.parse(fs.readFileSync(path.join(cacheDir,"auto.json"),"utf8")); } catch {}
+      const ids=[...new Set(cached.filter(row=>String(row["Номера грузовых единиц"]||"").toUpperCase().split(/[^A-Z0-9]+/).includes(container)).map(row=>cleanText(row["Номер записи"])).filter(id=>/^\d+$/.test(id)))];
+      if(!ids.length)throw new Error(`TMS не приняла поиск по контейнеру ${container}, а номера его записей нет в локальной базе. ${error.message}`);
+      rows=[];
+      try {
+        for(const id of ids)rows.push(...await getAutoRows(session,{tryNewFilterFormat:true,value:[["ID","=",Number(id)]]},"",()=>{}));
+      } catch(fallbackError) {
+        throw new Error(`TMS не приняла поиск по контейнеру ${container} и по номеру записи ${ids.join(", ")}: ${fallbackError.message}`);
+      }
+    }
+    autoRows.push(...rows.filter(row=>String(row["Номера грузовых единиц"]||"").toUpperCase().split(/[^A-Z0-9]+/).includes(container)));
+    try { cargoRows.push(...await getCargoRows(session,cargoFilter,"",()=>{})); } catch(error) {
+      // A missing cargo row must not hide an otherwise valid TTN/CMR operation.
+      if(!autoRows.length)throw error;
+    }
   }
   if(cargoRows.length)mergeTransportCache(path.join(cacheDir,"cargo.xlsx"),"OPERATION_UNIT",cargoRows);
   if(autoRows.length)mergeTransportCache(path.join(cacheDir,"auto.xlsx"),"OPERATION_SUB_DOC",autoRows);
