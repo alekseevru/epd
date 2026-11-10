@@ -17,6 +17,13 @@ export function previousMondayKey(week) {
   return date.toISOString().slice(0, 10);
 }
 
+export function hasWeeklySnapshot(file, now = new Date()) {
+  try {
+    const snapshot = JSON.parse(fs.readFileSync(file, "utf8"))[mondayKey(now)];
+    return Boolean(snapshot && Array.isArray(snapshot.items) && Array.isArray(snapshot.tmsTrips));
+  } catch { return false; }
+}
+
 export function recordWeeklyStatistics(file, value, now = new Date()) {
   const week = mondayKey(now);
   const previousWeek = previousMondayKey(week);
@@ -25,11 +32,12 @@ export function recordWeeklyStatistics(file, value, now = new Date()) {
     try { stored = JSON.parse(fs.readFileSync(file, "utf8")); } catch { /* Replace corrupt snapshots with the current valid sample. */ }
   }
   const previous = stored[previousWeek] || null;
-  const current = {capturedAt:now.toISOString(),items:value.items,tmsTrips:value.tmsTrips};
-  const next = {[week]:current};
-  if (previous) next[previousWeek] = previous;
-  fs.mkdirSync(path.dirname(file), {recursive:true});
-  fs.writeFileSync(`${file}.tmp`, JSON.stringify(next));
-  fs.renameSync(`${file}.tmp`, file);
-  return {currentWeek:week,previousWeek,previous};
+  let current = stored[week];
+  if (!current || !Array.isArray(current.items) || !Array.isArray(current.tmsTrips)) {
+    current = {capturedAt:now.toISOString(),items:value.items,tmsTrips:value.tmsTrips};
+    fs.mkdirSync(path.dirname(file), {recursive:true});
+    fs.writeFileSync(`${file}.tmp`, JSON.stringify({...stored,[week]:current}));
+    fs.renameSync(`${file}.tmp`, file);
+  }
+  return {currentWeek:week,previousWeek,current,previous};
 }

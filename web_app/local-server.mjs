@@ -12,7 +12,7 @@ import { konturDocumentUrl, logisticsIdFromCustomData, verifiedForwardingUrl } f
 import { assertDraftTransferAllowed, draftMessageToPost, savedDraftDocument } from "./kontur-draft.mjs";
 import { loadMonthlyDocuments } from "./statistics-pagination.mjs";
 import { isInternationalTruckUnit } from "./statistics-unit-filter.mjs";
-import { mondayKey, recordWeeklyStatistics } from "./statistics-weekly.mjs";
+import { hasWeeklySnapshot, mondayKey, recordWeeklyStatistics } from "./statistics-weekly.mjs";
 import { isCarrierTitle4Signed } from "./statistics-title4.mjs";
 import { forwardingDirection } from "./kontur-document-direction.mjs";
 
@@ -272,6 +272,7 @@ let signingControlCache={expiresAt:0,value:null};
 let forwardingOrdersCache={expiresAt:0,value:null};
 const statisticsCache=new Map();
 const statisticsLatestFile=path.join(cacheRoot,"statistics-latest.json");
+const weeklyStatisticsFile=path.join(cacheRoot,"statistics-weekly.json");
 let statisticsLatest=null,statisticsRefreshPromise=null,statisticsRefreshError="",statisticsRefreshAttempt=0;
 try{const saved=JSON.parse(fs.readFileSync(statisticsLatestFile,"utf8"));if(Array.isArray(saved.items)&&Array.isArray(saved.tmsTrips)&&saved.items.every(item=>typeof item.carrierTitle4Signed==="boolean"))statisticsLatest=saved;}catch{}
 const startStatisticsRefresh=()=>{
@@ -283,6 +284,10 @@ const startStatisticsRefresh=()=>{
     fs.renameSync(`${statisticsLatestFile}.tmp`,statisticsLatestFile);
     statisticsLatest=value;
   }).catch(error=>{statisticsRefreshError=error.message||"Не удалось обновить статистику";console.error("Statistics refresh:",statisticsRefreshError);}).finally(()=>{statisticsRefreshPromise=null;});
+};
+const ensureMondayStatisticsSnapshot=()=>{
+  if(hasWeeklySnapshot(weeklyStatisticsFile)||statisticsRefreshPromise||Date.now()-statisticsRefreshAttempt<5*60_000)return;
+  startStatisticsRefresh();
 };
 const actualDeliveryValue=row=>row["Фактическая дата доставки на склад"]||row["Фактическая дата прибытия"]||row["Фактическая дата доставки"]||row["Actual delivery date"]||"";
 const loadTmsActualTrips=(etrnItems,month)=>{const jsonFile=path.join(cacheRoot,"auto.json");if(!fs.existsSync(jsonFile))throw new Error("Нет данных ТТН/CMR TMS. Обновите данные TMS перед расчётом статистики.");let rows;try{rows=JSON.parse(fs.readFileSync(jsonFile,"utf8"));if(!Array.isArray(rows))throw new Error("Некорректный формат");}catch{throw new Error("Не удалось прочитать ТТН/CMR TMS. Обновите данные TMS.");}const etrnByContainer=new Map();for(const item of etrnItems)for(const container of item.containers||[])etrnByContainer.set(String(container).toUpperCase(),item);return rows.flatMap((row,index)=>{const rawDate=actualDeliveryValue(row),date=new Date(rawDate);if(!rawDate||Number.isNaN(date.getTime()))return [];const rowMonth=`${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,"0")}`;if(rowMonth<"2026-09"||month!=="all"&&rowMonth!==month)return [];const rawContainers=String(row["Номера грузовых единиц"]||row["Номер контейнера"]||"").toUpperCase();if(isInternationalTruckUnit(rawContainers))return [];const containers=[...new Set(rawContainers.match(/[A-Z]{4}\d{7}/g)||[])],etrn=containers.map(container=>etrnByContainer.get(container)).find(Boolean),client=String(row["Клиент"]||"").trim(),consignee=String(row["Грузополучатель"]||client||"Не указано").trim()||"Не указано";return [{id:String(row["Номер записи"]||index),month:rowMonth,carrier:String(row["Исполнитель"]||row["Партнер"]||row["Перевозчик"]||"Не указано").trim()||"Не указано",client,consignee,container:containers.join(", ")||rawContainers||"—",actualDeliveryDate:new Intl.DateTimeFormat("ru-RU",{timeZone:"Europe/Moscow"}).format(date),etrnNumber:etrn?.number||null,title2Signed:etrn?.carrierTitle2Signed===true,documentUrl:etrn?.documentUrl||null}];});};
@@ -306,7 +311,7 @@ async function loadDocumentStatistics(month,force=false){
   const merged=new Map();for(const item of items.filter(Boolean)){const hasStableNumber=item.number&&!/^(?:б\/н|Без номера)$/iu.test(item.number),logicalKey=item.logisticsId||(hasStableNumber?`${item.month}:${item.number}`:item.messageId);const current=merged.get(logicalKey);if(!current){merged.set(logicalKey,item);continue;}current.title1or2Signed=current.title1or2Signed||item.title1or2Signed;current.carrierTitle2Signed=current.carrierTitle2Signed||item.carrierTitle2Signed;current.consigneeTitle3Signed=current.consigneeTitle3Signed||item.consigneeTitle3Signed;if(current.carrier==="Не указано"&&item.carrier!=="Не указано")current.carrier=item.carrier;if(current.consignee==="Не указано"&&item.consignee!=="Не указано")current.consignee=item.consignee;if(current.deliveryTimestamp===null&&item.deliveryTimestamp!==null){current.deliveryTimestamp=item.deliveryTimestamp;current.deliveryDate=item.deliveryDate;}current.containers=[...new Set([...current.containers,...item.containers])];}
   for(const item of items.filter(Boolean)){const hasStableNumber=item.number&&!/^(?:б\/н|Без номера)$/iu.test(item.number),logicalKey=item.logisticsId||(hasStableNumber?`${item.month}:${item.number}`:item.messageId);const current=merged.get(logicalKey);current.carrierTitle4Signed ||= item.carrierTitle4Signed;}
   const now=Date.now(),completed=[...merged.values()].filter(item=>item.deliveryTimestamp!==null&&item.deliveryTimestamp<=now).map(({logisticsId,deliveryTimestamp,...item})=>item),allTrips=loadTmsActualTrips(completed,"all");
-  const weekly=recordWeeklyStatistics(path.join(cacheRoot,"statistics-weekly.json"),{items:completed,tmsTrips:allTrips});
+  const weekly=recordWeeklyStatistics(weeklyStatisticsFile,{items:completed,tmsTrips:allTrips});
   const value={generatedAt:new Date().toISOString(),fromMonth:"2026-09",items:completed.filter(item=>month==="all"||item.month===month),tmsTrips:allTrips.filter(item=>month==="all"||item.month===month),weekly};statisticsCache.set(cacheKey,{expiresAt:Date.now()+10*60_000,value});return value;
 }
 async function loadSigningControl(){
@@ -854,6 +859,7 @@ const server = http.createServer((request, response) => {
 server.listen(publicPort, "0.0.0.0", () => console.log(`AGR local website: http://127.0.0.1:${publicPort}`));
 const dailyCounteragentSync=()=>{const file=sourceFiles.edo();const fresh=fs.existsSync(file)&&Date.now()-fs.statSync(file).mtimeMs<24*60*60_000;if(!fresh&&loadKonturTokens()?.access_token)void runCounteragentSync(()=>{}).catch(error=>console.error("Daily counteragent sync:",error.message));};
 setTimeout(dailyCounteragentSync,20_000);const counteragentTimer=setInterval(dailyCounteragentSync,60*60_000);counteragentTimer.unref();
+setTimeout(ensureMondayStatisticsSnapshot,30_000);const mondaySnapshotTimer=setInterval(ensureMondayStatisticsSnapshot,5*60_000);mondaySnapshotTimer.unref();
 const stop = () => { server.close(); app.kill(); if(generatorWorker) generatorWorker.kill(); };
 process.on("SIGINT", stop);
 process.on("SIGTERM", stop);
