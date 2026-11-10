@@ -154,13 +154,17 @@ class AddressRegressions(unittest.TestCase):
         context = generator.context({"_container": "MIOU4934154", "Номер автомашины": "В512ММ98"}, date(2026, 8, 31), "Иванов Иван Иванович", None)
         for empty in (False, True):
             _, content = generator.etrn(context, empty=empty)
-            truck = ET.fromstring(content).find(".//СвТС/ТС")
+            root = ET.fromstring(content)
+            truck = root.find(".//СвТС/ТС")
+            trailer = root.find(".//СвТС/Прицеп")
             self.assertEqual(truck.get("ТипВлад"), "3")
             basis = truck.find("ОснАрЛиз")
             self.assertEqual(basis.get("НаимДок"), "Договор аренды")
             self.assertEqual(basis.get("НомерДок"), "бн")
             self.assertEqual(basis.get("ДатаДок"), "14.01.2026")
             self.assertEqual(basis.findtext("ИдРекСост/ИННФЛ"), "781133069839")
+            self.assertEqual(trailer.get("ТипВлад"), "3")
+            self.assertEqual(ET.tostring(trailer.find("ОснАрЛиз")), ET.tostring(basis))
 
     def test_vehicle_lease_uses_same_note_fields(self):
         details = vehicle_ownership_details({
@@ -178,10 +182,14 @@ class AddressRegressions(unittest.TestCase):
         context = generator.context({"_container": "MIOU4934154", "Номер автомашины": "В512ММ98"}, date(2026, 8, 31), "Иванов Иван Иванович", None)
         for empty in (False, True):
             _, content = generator.etrn(context, empty=empty)
-            truck = ET.fromstring(content).find(".//СвТС/ТС")
+            root = ET.fromstring(content)
+            truck = root.find(".//СвТС/ТС")
+            trailer = root.find(".//СвТС/Прицеп")
             self.assertEqual(truck.get("ТипВлад"), "4")
             self.assertEqual(truck.find("ОснАрЛиз").get("НаимДок"), "Договор лизинга")
             self.assertEqual(truck.findtext("ОснАрЛиз/ИдРекСост/ИННЮЛ"), "7701234567")
+            self.assertEqual(trailer.get("ТипВлад"), "4")
+            self.assertEqual(ET.tostring(trailer.find("ОснАрЛиз")), ET.tostring(truck.find("ОснАрЛиз")))
 
     def test_vehicle_contract_can_be_completed_in_draft(self):
         for ownership, code in (("Аренда", "3"), ("Лизинг", "4")):
@@ -195,9 +203,13 @@ class AddressRegressions(unittest.TestCase):
                                                 date(2026, 8, 31), "Иванов Иван Иванович", None)
                     for empty in (False, True):
                         _, content = generator.etrn(context, empty=empty)
-                        truck = ET.fromstring(content).find(".//СвТС/ТС")
+                        root = ET.fromstring(content)
+                        truck = root.find(".//СвТС/ТС")
+                        trailer = root.find(".//СвТС/Прицеп")
                         self.assertEqual(truck.get("ТипВлад"), code)
                         self.assertIsNone(truck.find("ОснАрЛиз"))
+                        self.assertEqual(trailer.get("ТипВлад"), code)
+                        self.assertIsNone(trailer.find("ОснАрЛиз"))
                         self.assertTrue(any("заполните договор вручную" in warning
                                             for warning in ServerGenerator.warnings(context, empty=empty)))
                     self.assertFalse(any("заполните договор вручную" in warning

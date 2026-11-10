@@ -793,6 +793,11 @@ class Generator:
                 ET.SubElement(ET.SubElement(basis, "ИдРекСост"), taxpayer).text = ownership["owner_inn"]
         trailer = info.find("СвТС/Прицеп")
         trailer.set("РегНомер", ctx["trailer"] or "ОТСУТСТВУЕТ")
+        trailer.set("ТипВлад", truck.get("ТипВлад", "1"))
+        for previous in trailer.findall("ОснАрЛиз"):
+            trailer.remove(previous)
+        for basis in truck.findall("ОснАрЛиз"):
+            trailer.append(copy.deepcopy(basis))
         if ctx.get("transport_mode") == "non_container":
             trailer_part = trailer.find("ПарТС")
             if trailer_part is not None:
