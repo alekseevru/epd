@@ -447,7 +447,7 @@ export async function refreshTmsContainers({login:loginName,password,captcha="",
   }
   if(cargoRows.length)mergeTransportCache(path.join(cacheDir,"cargo.xlsx"),"OPERATION_UNIT",cargoRows);
   if(autoRows.length)mergeTransportCache(path.join(cacheDir,"auto.xlsx"),"OPERATION_SUB_DOC",autoRows);
-  return {cargo:cargoRows.length,auto:autoRows.length,records:autoRows.map(row=>({id:cleanText(row["Номер записи"]),carrier:cleanText(row["Исполнитель"]),createdAt:cleanText(row["Дата создания строки"])}))};
+  return {cargo:cargoRows.length,auto:autoRows.length,refreshedContainers:requested.filter(container=>autoRows.some(row=>String(row["Номера грузовых единиц"]||"").toUpperCase().split(/[^A-Z0-9]+/).includes(container))),records:autoRows.map(row=>({id:cleanText(row["Номер записи"]),carrier:cleanText(row["Исполнитель"]),createdAt:cleanText(row["Дата создания строки"])}))};
 }
 
 export async function syncTms({ login: loginName, password, captcha = "", cacheDir, referenceDir, onStatus = () => {} }) {
