@@ -7,6 +7,7 @@ import { spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import * as XLSX from "xlsx";
 import { syncTms, refreshTmsContainers, contractRowsToCatalog, generateTmsCaptcha, TmsCaptchaError } from "./tms-sync.mjs";
+import { needsTmsRefresh } from "./tms-refresh-policy.mjs";
 import { isTmsApiConfigured, resolveTmsCredentials } from "./tms-credentials.mjs";
 import { konturDocumentUrl, logisticsIdFromCustomData, verifiedForwardingUrl } from "./kontur-document-links.mjs";
 import { assertDraftTransferAllowed, draftMessageToPost, savedDraftDocument } from "./kontur-draft.mjs";
@@ -23,13 +24,56 @@ const localEnvFile = path.join(root,"..",".env");
 if (fs.existsSync(localEnvFile) && typeof process.loadEnvFile === "function") process.loadEnvFile(localEnvFile);
 const clientRoot = path.join(root, "dist", "client");
 const vinextCli = path.join(root, "node_modules", "vinext", "dist", "cli.js");
-const appPort = 3001;
+const appPort = Number(process.env.APP_PORT || 3001);
 const publicPort = Number(process.env.PORT || 3000);
 const captchaDataUrl = image => {
   if(typeof image!=="string"||image.length>200_000||!/^<svg\b/i.test(image))throw new Error("TMS вернула неверное изображение капчи");
   return "data:image/svg+xml;base64,"+Buffer.from(image,"utf8").toString("base64");
 };
 const cacheRoot = path.join(root,"work","source-cache");
+const tmsContainerChecksFile=path.join(cacheRoot,"container-refresh-checks.json");
+let savedTmsContainerChecks={};
+try {savedTmsContainerChecks=JSON.parse(fs.readFileSync(tmsContainerChecksFile,"utf8"));} catch {}
+const tmsContainerChecks = new Map(Object.entries(savedTmsContainerChecks));
+function markTmsContainersChecked(containers) {
+  for(const container of containers)tmsContainerChecks.set(container,Date.now());
+  fs.writeFileSync(tmsContainerChecksFile,JSON.stringify(Object.fromEntries(tmsContainerChecks)));
+}
+let tmsAutoIndex = {mtime:0,rows:new Map()};
+function cachedAutoRows() {
+  const file=path.join(cacheRoot,"auto.json");
+  if(!fs.existsSync(file))return new Map();
+  const mtime=fs.statSync(file).mtimeMs;
+  if(mtime===tmsAutoIndex.mtime)return tmsAutoIndex.rows;
+  const index=new Map();
+  for(const row of JSON.parse(fs.readFileSync(file,"utf8"))){
+    for(const container of String(row["Номера грузовых единиц"]||"").toUpperCase().match(/[A-Z]{4}\d{7}/g)||[]){
+      if(!index.has(container))index.set(container,[]);
+      index.get(container).push(row);
+    }
+  }
+  tmsAutoIndex={mtime,rows:index};
+  return index;
+}
+async function ensureCurrentTms(containers,{strict=false}={}) {
+  const index=cachedAutoRows();
+  const requested=[...new Set((containers||[]).map(value=>String(value||"").trim().toUpperCase()).filter(value=>/^[A-Z]{4}\d{7}$/.test(value)))];
+  const stale=requested.filter(container=>(index.get(container)||[]).some(row=>needsTmsRefresh(row,tmsContainerChecks.get(container))));
+  const checkedAt=()=>Object.fromEntries(requested.filter(container=>tmsContainerChecks.has(container)).map(container=>[container,new Date(tmsContainerChecks.get(container)).toISOString()]));
+  if(!stale.length)return {refreshed:[],checkedAt:checkedAt()};
+  try {
+    const credentials=resolveTmsCredentials({mode:"api"});
+    const result=await refreshTmsContainers({...credentials,cacheDir:cacheRoot,containers:stale});
+    if(stale.some(container=>!result.refreshedContainers?.includes(container)))throw new Error("TMS не вернула все запрошенные записи ТТН/CMR");
+    markTmsContainersChecked(stale);
+    restartGeneratorWorker();
+    return {refreshed:stale,checkedAt:checkedAt()};
+  } catch(error) {
+    const message=`Не удалось проверить актуальность ТТН/CMR для ${stale.join(", ")}: ${error.message}`;
+    if(strict)throw new Error(message);
+    return {refreshed:[],checkedAt:checkedAt(),warning:message};
+  }
+}
 const konturTokenFile = path.join(root,"work","kontur-tokens.json");
 const referenceRoot = process.env.AGR_REFERENCES_DIR || path.join(root,"..","data","references");
 const forwardingLinks = JSON.parse(fs.readFileSync(path.join(root,"forwarding-logistics-links.json"),"utf8"));
@@ -674,6 +718,7 @@ const server = http.createServer((request, response) => {
   if(request.method==="POST"&&url.pathname==="/api/forwarding-order"){
     let body="";request.setEncoding("utf8");request.on("data",chunk=>body+=chunk);request.on("end",()=>void(async()=>{try{
       const payload=JSON.parse(body);for(const key of ["orderNumber","user","signer"])if(!String(payload[key]||"").trim())throw new Error(`Не заполнено поле: ${key}`);if(!Array.isArray(payload.containers)||!payload.containers.length)throw new Error("В заказе нет контейнеров");
+      await ensureCurrentTms(payload.containers,{strict:true});
       const edoPreferences=loadEdoPreferences();
       let recipientBoxId="";
       if(payload.direction==="taglex_to_carrier"){
@@ -716,7 +761,9 @@ const server = http.createServer((request, response) => {
   if (request.method === "POST" && url.pathname === "/api/trips/search") {
     let body="";request.setEncoding("utf8");request.on("data",chunk=>body+=chunk);request.on("end",()=>void(async()=>{try{
       const payload=JSON.parse(body||"{}");if(!Array.isArray(payload.containers))throw new Error("Не переданы номера контейнеров");
+      const tmsRefresh=await ensureCurrentTms(payload.containers);
       let result=await sendGeneratorRequest({...payload,action:"search_trips"});if(result.error)throw new Error(result.error);
+      result={...result,tmsRefresh};
       response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify(result));
     }catch(error){response.writeHead(400,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({error:error.message||"Не удалось выполнить поиск"}));}})());return;
   }
@@ -727,6 +774,7 @@ const server = http.createServer((request, response) => {
       const credentials=resolveTmsCredentials(payload);
       const result=await refreshTmsContainers({...credentials,cacheDir:cacheRoot,containers:[container]});
       if(!result.auto)throw new Error(`TMS не вернула записи ТТН/CMR для ${container}`);
+      markTmsContainersChecked([container]);
       restartGeneratorWorker();
       response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify(result));
     }catch(error){response.writeHead(400,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify({error:error.message||"Не удалось загрузить историю контейнера"}));}})());return;
@@ -812,6 +860,7 @@ const server = http.createServer((request, response) => {
     let body=""; request.setEncoding("utf8"); request.on("data",chunk=>{body+=chunk;}); request.on("end",()=>{void(async()=>{
       try {
         const payload=JSON.parse(body);
+        await ensureCurrentTms([payload.container],{strict:true});
         payload.savedCorrections=loadManualCorrections();
         const edoOptions=await sendGeneratorRequest({...payload,action:"edo_options"});
         if(edoOptions.error)throw new Error(edoOptions.error);
