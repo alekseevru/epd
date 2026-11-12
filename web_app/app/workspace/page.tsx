@@ -4,6 +4,7 @@ import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import styles from "./workspace.module.css";
 import appPackage from "../../package.json";
+import {readForwardingResponse} from "../forwarding-response";
 
 type Row = Record<string, unknown>;
 type EdoOption={id:string;name:string;status:string;boxId:string;operator:string;history?:{count:number;lastSignedAt:string;documentNumber:string}|null};
@@ -400,7 +401,7 @@ export default function Workspace() {
       const orderNumber=transportMode==="non_container"?vehicleNumber:trip._container;
       if(!orderNumber)throw new Error("Для поручения по тенту не найден номер транспортного средства в TMS");
       const payload={orderNumber,containers:[trip._container],recordId:trip._recordId,transportMode,cargoName,services:forwardingServices[trip._key]||[],user:employee.trim(),signer:employee.trim(),direction:"taglex_to_carrier"};
-      const requestForwarding=async(manualValues?:Record<string,string>)=>{const response=await fetch("/api/forwarding-order",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...payload,manualValues})});return {response,result:await response.json()};};
+      const requestForwarding=async(manualValues?:Record<string,string>)=>{const response=await fetch("/api/forwarding-order",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...payload,manualValues})});return {response,result:await readForwardingResponse(response)};};
       let {response,result}=await requestForwarding();
       if(result.requiresConfirmation){
         const choice=await requestWarningConfirmation(trip._container,"forwarding",result.warnings||[],result.editableFields||[],true);
