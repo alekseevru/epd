@@ -3,6 +3,7 @@ import {useEffect,useState} from "react";
 import appPackage from "../../package.json";
 import SignDialog from "../control/sign-dialog";
 import styles from "./page.module.css";
+import {readForwardingResponse} from "../forwarding-response";
 
 type Order={number:string;containers:string[];client:string;route:string;departure:string;arrival:string};
 type MissingDateField={id:string;label:string;inputType?:"date"};
@@ -24,10 +25,10 @@ export default function ForwardingOrders(){
     setBusy(order.number);setMessage(`Формируем поручение по заказу ${order.number}…`);
     try{
       const response=await fetch("/api/forwarding-order",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({orderNumber:order.number,containers:order.containers,user:"Алексеев Михаил Геннадьевич",signer,services,manualValues})});
-      const result=await response.json();
+      const result=await readForwardingResponse(response);
       if(!response.ok)throw new Error(result.error||"Не удалось сформировать поручение");
       if(result.requiresConfirmation){setPendingDeparture({order,warnings:result.warnings||[],fields:result.editableFields||[]});setDateValues(manualValues||{});setMessage("В TMS не указана дата отправления. Заполните её вручную для этого поручения.");return;}
-      if(!result.content)throw new Error("Контур не вернул XML поручения");
+      if(!result.content||!result.filename)throw new Error("Контур не вернул XML поручения");
       const bytes=Uint8Array.from(atob(result.content),(char)=>char.charCodeAt(0));const link=document.createElement("a");link.href=URL.createObjectURL(new Blob([bytes],{type:"application/xml"}));link.download=result.filename;link.click();URL.revokeObjectURL(link.href);
       setPendingDeparture(null);setMessage(`XML по заказу ${order.number} сформирован: ${order.containers.length} контейнеров, услуг: ${services.length}`);
     }catch(error){setMessage(error instanceof Error?error.message:"Ошибка формирования");}finally{setBusy("");}

@@ -11,6 +11,11 @@ from manual_corrections import prepare_manual_fields
 
 
 class AddressRegressions(unittest.TestCase):
+    def test_forwarding_departure_uses_tms_planned_date(self):
+        generator = Generator(Path(__file__).parent / "resources", Catalogs())
+        context = generator.context({"_container": "NEPU4547487", "Плановая дата отправления": "2026-11-13T08:00:00"}, date(2026, 11, 12), "Иванов Иван Иванович")
+        self.assertEqual(context["planned_departure_datetime"], datetime(2026, 11, 13, 8, 0))
+
     def test_transport_mode_follows_ttn_unit_types(self):
         self.assertEqual(transport_mode_from_ttn({"Типы грузовых единиц": "1x40HC"}), "container")
         self.assertEqual(transport_mode_from_ttn({"Типы грузовых единиц": "1xТент 120 м3"}), "non_container")
@@ -537,6 +542,8 @@ class AddressRegressions(unittest.TestCase):
         self.assertNotIn(chr(0xDC98), xml)
         root = ET.fromstring(xml)
         self.assertIsNone(root.find(".//ItemDescription/CargoNumbers"))
+        self.assertEqual(root.find(".//CargoInfo").get("ReadyFromDate"), "15.09.2026")
+        self.assertEqual(root.find(".//CargoInfo").get("ReadyToDate"), "15.09.2026")
         self.assertEqual(root.findtext(".//CargoOriginCountryInfo/Country"), "643")
         container = root.find(".//TransportContainer")
         self.assertEqual(container.get("ContainerOrderNumber"), "1")
