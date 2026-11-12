@@ -720,6 +720,9 @@ const server = http.createServer((request, response) => {
       const payload=JSON.parse(body);for(const key of ["orderNumber","user","signer"])if(!String(payload[key]||"").trim())throw new Error(`Не заполнено поле: ${key}`);if(!Array.isArray(payload.containers)||!payload.containers.length)throw new Error("В заказе нет контейнеров");
       await ensureCurrentTms(payload.containers,{strict:true});
       const edoPreferences=loadEdoPreferences();
+      const departureCheck=await sendGeneratorRequest({...payload,action:"forwarding_departure_check"});
+      if(departureCheck.error)throw new Error(departureCheck.error);
+      if(departureCheck.requiresConfirmation){response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify(departureCheck));return;}
       let recipientBoxId="";
       if(payload.direction==="taglex_to_carrier"){
         for(const container of payload.containers){
@@ -734,6 +737,7 @@ const server = http.createServer((request, response) => {
         }
       }
       const generatedData=await sendGeneratorRequest({...payload,action:"forwarding_userdata_multi",date:payload.date||new Date().toISOString().slice(0,10),edoPreferences});if(generatedData.error)throw new Error(generatedData.error);
+      if(generatedData.requiresConfirmation){response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify(generatedData));return;}
       const config=konturConfig();const accessToken=await getKonturAccessToken();const generateUrl=`${diadocApiUrl}/GenerateTitleXml?boxId=${encodeURIComponent(config.boxId)}&documentTypeNamedId=LogisticsForwardingOrder&documentFunction=default&documentVersion=kl_porek_wt3_05_02_01&titleIndex=0`;
       const generated=await fetch(generateUrl,{method:"POST",headers:{Authorization:`Bearer ${accessToken}`,"Content-Type":"application/xml; charset=utf-8"},body:generatedData.userDataXml,signal:AbortSignal.timeout(45_000)});const bytes=Buffer.from(await generated.arrayBuffer());if(!generated.ok)throw new Error(new TextDecoder().decode(bytes)||`Диадок вернул HTTP ${generated.status}`);
       const officialId=xmlAttribute(bytes.toString("utf8"),"ИдФайл");

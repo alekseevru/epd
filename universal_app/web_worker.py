@@ -5,7 +5,7 @@ import json
 import os
 import re
 import sys
-from datetime import date
+from datetime import date, datetime, time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -212,6 +212,19 @@ def apply_transport_context(ctx, row, request, cargo_name="", require_cargo=True
     return ctx
 
 
+def forwarding_manual_departure(auto, manual_values, container):
+    """Require an explicit date when TMS has no planned departure for this trip."""
+    if clean(value(auto, "Плановая дата отправления")):
+        return None
+    entered = clean((manual_values or {}).get(f"plannedDepartureDate:{container}"))
+    if not entered:
+        return None
+    try:
+        return datetime.combine(date.fromisoformat(entered), time.min)
+    except ValueError as error:
+        raise ValueError(f"Для {container} укажите дату отправления в формате ГГГГ-ММ-ДД") from error
+
+
 def handle(request):
     refresh_catalogs()
     refresh_sources()
@@ -296,12 +309,26 @@ def handle(request):
             return {"requiresConfirmation":True, "warnings":warnings, "editableFields":editable}
         filename, content = generator.ezz_multi(contexts)
         return {"filename":filename, "content":base64.b64encode(content).decode("ascii"), "appliedCorrections":corrections}
+    if action == "forwarding_departure_check":
+        missing = []
+        for container_number in [clean(item) for item in request.get("containers", []) if clean(item)]:
+            _, auto = selected_record(container_number, request.get("recordId") if len(request.get("containers", [])) == 1 else "")
+            if not auto:
+                raise ValueError(f"перевозка {container_number} не найдена в TMS")
+            if not clean(value(auto, "Плановая дата отправления")) and forwarding_manual_departure(auto, request.get("manualValues"), container_number) is None:
+                missing.append(container_number)
+        if missing:
+            return {"requiresConfirmation": True,
+                    "warnings": [f"Для {container} в ТТН/CMR не указана плановая дата отправления. Укажите её вручную." for container in missing],
+                    "editableFields": [{"id": f"plannedDepartureDate:{container}", "label": f"Дата отправления {container}", "inputType": "date"} for container in missing]}
+        return {"ready": True}
     if action == "forwarding_userdata_multi":
         containers = [clean(item) for item in request.get("containers", []) if clean(item)]
         services = list(dict.fromkeys(clean(item) for item in request.get("services", []) if clean(item)))
         if not containers:
             raise ValueError("в заказе нет контейнеров")
         user = clean(request.get("user"))
+        missing_departures = []
         contexts = []
         for container_number in containers:
             cargo, auto = selected_record(container_number, request.get("recordId") if len(containers) == 1 else "")
@@ -309,7 +336,13 @@ def handle(request):
                 cargo = dict(auto)
             if not cargo or not auto:
                 raise ValueError(f"перевозка {container_number} не найдена в TMS")
+            manual_departure = forwarding_manual_departure(auto, request.get("manualValues"), container_number)
+            if not clean(value(auto, "Плановая дата отправления")) and manual_departure is None:
+                missing_departures.append(container_number)
+                continue
             context = generator.context({**cargo, **(auto or {}), "_container":container_number}, date.fromisoformat(request.get("date") or date.today().isoformat()), user, None)
+            if manual_departure is not None:
+                context["planned_departure_datetime"] = manual_departure
             apply_transport_context(context, auto, request, value(cargo, "Наименование груза"))
             if request.get("direction") == "taglex_to_carrier":
                 context["carrier_edo"] = catalogs.preferred_edo_id(
@@ -332,6 +365,10 @@ def handle(request):
                 context["container_iso"] = container_iso_from_ttn(auto or {}, container_number)
                 context["container_tare"] = "2200" if context["container_iso"].startswith("20") else "3700"
             contexts.append(context)
+        if missing_departures:
+            return {"requiresConfirmation":True,
+                    "warnings":[f"Для {container} в ТТН/CMR не указана плановая дата отправления. Укажите её вручную." for container in missing_departures],
+                    "editableFields":[{"id":f"plannedDepartureDate:{container}","label":f"Дата отправления {container}","inputType":"date"} for container in missing_departures]}
         return {"userDataXml":generator.forwarding_order_userdata(contexts, clean(request.get("signer")), request.get("direction") or "client_to_taglex")}
     container = request["container"]
     cargo, auto = selected_record(container, request.get("recordId"))
@@ -360,6 +397,13 @@ def handle(request):
     if request.get("action") == "forwarding_preview":
         return {"client":ctx["client"],"clientEdo":ctx["client_edo"],"consignee":ctx["consignee"],"loading":ctx["loading"],"delivery":ctx["delivery"],"contract":ctx.get("client_contract"),"number":ctx["order_number"],"date":ctx["order_date"],"weight":ctx["weight"]}
     if request.get("action") == "forwarding_userdata":
+        manual_departure = forwarding_manual_departure(auto, request.get("manualValues"), container)
+        if not clean(value(auto, "Плановая дата отправления")) and manual_departure is None:
+            return {"requiresConfirmation": True,
+                    "warnings": [f"Для {container} в ТТН/CMR не указана плановая дата отправления. Укажите её вручную."],
+                    "editableFields": [{"id": f"plannedDepartureDate:{container}", "label": f"Дата отправления {container}", "inputType": "date"}]}
+        if manual_departure is not None:
+            ctx["planned_departure_datetime"] = manual_departure
         if request.get("direction") == "taglex_to_carrier":
             ctx["carrier_edo"] = catalogs.preferred_edo_id(ctx["carrier"], request.get("edoPreferences"))
         return {"userDataXml":generator.forwarding_order_userdata(ctx, clean(request.get("signer")), request.get("direction") or "client_to_taglex")}

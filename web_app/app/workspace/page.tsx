@@ -20,7 +20,7 @@ type KonturStatus = {
   user:{name:string;email:string;username:string}|null;
   permissions:string[];
 };
-type EditableField={id:string;label:string;hint?:string};
+type EditableField={id:string;label:string;hint?:string;inputType?:"text"|"date"};
 type WarningChoice={manualValues:Record<string,string>;saveManualValues:boolean}|null;
 const emptyKonturTransferSteps=():KonturTransferState["steps"]=>({
   xml:{state:"queued",message:"Ожидает"},
@@ -149,7 +149,7 @@ export default function Workspace() {
   const [konturTransfer,setKonturTransfer]=useState<KonturTransferState>({open:false,busy:false,container:"",documentTitle:"",summary:"",steps:emptyKonturTransferSteps()});
   const restoredRef = useRef(false);
   const warningResolverRef=useRef<((choice:WarningChoice)=>void)|null>(null);
-  const [warningDialog,setWarningDialog]=useState<{open:boolean;container:string;kind:"cargo"|"empty"|"order";warnings:string[];fields:EditableField[]}>({open:false,container:"",kind:"cargo",warnings:[],fields:[]});
+  const [warningDialog,setWarningDialog]=useState<{open:boolean;container:string;kind:DocumentKind;warnings:string[];fields:EditableField[];required?:boolean}>({open:false,container:"",kind:"cargo",warnings:[],fields:[]});
   const [warningValues,setWarningValues]=useState<Record<string,string>>({});
   const [rememberWarnings,setRememberWarnings]=useState(true);
   const [warningInputError,setWarningInputError]=useState("");
@@ -166,10 +166,10 @@ export default function Workspace() {
     catch(error){setMessage(error instanceof Error?error.message:"Не удалось сохранить сотрудника");}
     finally{setSavingEmployee(false);}
   };
-  const requestWarningConfirmation=(container:string,kind:"cargo"|"empty"|"order",warnings:string[],fields:EditableField[])=>new Promise<WarningChoice>(resolve=>{
+  const requestWarningConfirmation=(container:string,kind:DocumentKind,warnings:string[],fields:EditableField[],required=false)=>new Promise<WarningChoice>(resolve=>{
     warningResolverRef.current=resolve;
-    setWarningValues({});setRememberWarnings(true);setWarningInputError("");
-    setWarningDialog({open:true,container,kind,warnings,fields});
+    setWarningValues({});setRememberWarnings(!required);setWarningInputError("");
+    setWarningDialog({open:true,container,kind,warnings,fields,required});
   });
   const closeWarningDialog=(choice:WarningChoice)=>{
     setWarningDialog(current=>({...current,open:false}));
@@ -178,7 +178,7 @@ export default function Workspace() {
   };
   const applyWarningValues=()=>{
     const missing=warningDialog.fields.filter(field=>!warningValues[field.id]?.trim());
-    if(missing.length){setWarningInputError(`Заполните поля: ${missing.map(field=>field.label).join(", ")}. Или выгрузите XML как есть.`);return;}
+    if(missing.length){setWarningInputError(`Заполните поля: ${missing.map(field=>field.label).join(", ")}.${warningDialog.required?"":" Или выгрузите XML как есть."}`);return;}
     closeWarningDialog({manualValues:warningValues,saveManualValues:rememberWarnings});
   };
 
@@ -399,8 +399,15 @@ export default function Workspace() {
       const vehicleNumber=value(trip._auto??{},"Номер автомашины","Транспортное средство").trim();
       const orderNumber=transportMode==="non_container"?vehicleNumber:trip._container;
       if(!orderNumber)throw new Error("Для поручения по тенту не найден номер транспортного средства в TMS");
-      const response=await fetch("/api/forwarding-order",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({orderNumber,containers:[trip._container],recordId:trip._recordId,transportMode,cargoName,services:forwardingServices[trip._key]||[],user:employee.trim(),signer:employee.trim(),direction:"taglex_to_carrier"})});
-      const result=await response.json();
+      const payload={orderNumber,containers:[trip._container],recordId:trip._recordId,transportMode,cargoName,services:forwardingServices[trip._key]||[],user:employee.trim(),signer:employee.trim(),direction:"taglex_to_carrier"};
+      const requestForwarding=async(manualValues?:Record<string,string>)=>{const response=await fetch("/api/forwarding-order",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...payload,manualValues})});return {response,result:await response.json()};};
+      let {response,result}=await requestForwarding();
+      if(result.requiresConfirmation){
+        const choice=await requestWarningConfirmation(trip._container,"forwarding",result.warnings||[],result.editableFields||[],true);
+        if(!choice)throw new Error("Формирование отменено: укажите дату отправления");
+        ({response,result}=await requestForwarding(choice.manualValues));
+      }
+      if(result.requiresConfirmation)throw new Error("Укажите дату отправления для поручения экспедитору");
       if(!response.ok||result.error)throw new Error(result.error||"Не удалось сформировать поручение");
       return result as {content:string;filename:string;recipientBoxId?:string};
     }
@@ -653,7 +660,18 @@ export default function Workspace() {
         })}</tbody></table></div></section></>}
       </>}
     </section>
-    {warningDialog.open && <div className={`${styles.modalBackdrop} ${styles.warningBackdrop}`}><section className={`${styles.statusModal} ${styles.warningGuide}`} role="dialog" aria-modal="true" aria-label="Проверка данных перед формированием"><header><div><small>ТРЕБУЕТСЯ ПРОВЕРКА</small><h2>{warningDialog.container}</h2><p>Недостающие сведения можно указать сейчас или выгрузить XML без них.</p></div><button aria-label="Закрыть" onClick={()=>closeWarningDialog(null)}>×</button></header><div className={styles.warningGuideBody}><ol>{warningDialog.warnings.map((warning,index)=><li key={index}>{warning}</li>)}</ol>{warningDialog.fields.length>0&&<section className={styles.warningEdit}><h3>Заполнить вручную</h3><div>{warningDialog.fields.map(field=><label key={field.id}><span>{field.label}</span><input value={warningValues[field.id]||""} placeholder={field.hint||"Введите значение"} onChange={event=>{setWarningValues(current=>({...current,[field.id]:event.target.value}));setWarningInputError("");}}/></label>)}</div><label className={styles.warningRemember}><input type="checkbox" checked={rememberWarnings} onChange={event=>setRememberWarnings(event.target.checked)}/> Запомнить исправления для следующих документов</label><p>Сохранённое подставляется только при отсутствии данных в TMS. Новые значения TMS всегда имеют приоритет.</p></section>}{warningInputError&&<p className={styles.warningInputError} role="alert">{warningInputError}</p>}{warningDialog.fields.length===0&&<p>Эти сведения пока нельзя изменить здесь. Проверьте черновик в Контуре перед подписанием.</p>}</div><footer><span>Неполный XML может потребовать правки в Контуре.</span><div><button className={styles.cancelButton} onClick={()=>closeWarningDialog(null)}>Отменить</button><button className={styles.cancelButton} onClick={()=>closeWarningDialog({manualValues:{},saveManualValues:false})}>Выгрузить XML как есть</button>{warningDialog.fields.length>0&&<button onClick={applyWarningValues}>Сохранить и сформировать XML</button>}</div></footer></section></div>}
+    {warningDialog.open && <div className={`${styles.modalBackdrop} ${styles.warningBackdrop}`}>
+      <section className={`${styles.statusModal} ${styles.warningGuide}`} role="dialog" aria-modal="true" aria-label="Проверка данных перед формированием">
+        <header><div><small>ТРЕБУЕТСЯ ПРОВЕРКА</small><h2>{warningDialog.container}</h2><p>{warningDialog.required?"Для поручения экспедитору укажите дату отправления из подтверждённых данных перевозки.":"Недостающие сведения можно указать сейчас или выгрузить XML без них."}</p></div><button aria-label="Закрыть" onClick={()=>closeWarningDialog(null)}>×</button></header>
+        <div className={styles.warningGuideBody}>
+          <ol>{warningDialog.warnings.map((warning,index)=><li key={index}>{warning}</li>)}</ol>
+          {warningDialog.fields.length>0&&<section className={styles.warningEdit}><h3>Заполнить вручную</h3><div>{warningDialog.fields.map(field=><label key={field.id}><span>{field.label}</span><input type={field.inputType||"text"} value={warningValues[field.id]||""} placeholder={field.hint||"Введите значение"} onChange={event=>{setWarningValues(current=>({...current,[field.id]:event.target.value}));setWarningInputError("");}}/></label>)}</div>{!warningDialog.required&&<><label className={styles.warningRemember}><input type="checkbox" checked={rememberWarnings} onChange={event=>setRememberWarnings(event.target.checked)}/> Запомнить исправления для следующих документов</label><p>Сохранённое подставляется только при отсутствии данных в TMS. Новые значения TMS всегда имеют приоритет.</p></>}</section>}
+          {warningInputError&&<p className={styles.warningInputError} role="alert">{warningInputError}</p>}
+          {warningDialog.fields.length===0&&<p>Эти сведения пока нельзя изменить здесь. Проверьте черновик в Контуре перед подписанием.</p>}
+        </div>
+        <footer><span>{warningDialog.required?"Дата не сохраняется для других перевозок.":"Неполный XML может потребовать правки в Контуре."}</span><div><button className={styles.cancelButton} onClick={()=>closeWarningDialog(null)}>Отменить</button>{!warningDialog.required&&<button className={styles.cancelButton} onClick={()=>closeWarningDialog({manualValues:{},saveManualValues:false})}>Выгрузить XML как есть</button>}{warningDialog.fields.length>0&&<button onClick={applyWarningValues}>Сохранить и сформировать XML</button>}</div></footer>
+      </section>
+    </div>}
     {tmsModalOpen && <div className={styles.modalBackdrop}><section className={styles.statusModal} role="dialog" aria-modal="true" aria-label="Статус обновления TMS"><header><div><small>ОБНОВЛЕНИЕ ИЗ TMS</small><h2>{tmsBusy?"Получаем актуальные данные":tmsStatusItems.some(item=>item.state==="error")?"Не удалось обновить данные":"Обновление завершено"}</h2><p>{tmsBusy?"В каждой строке показано, какой реестр сейчас читается и сколько строк уже получено.":message}</p></div><button onClick={()=>setTmsModalOpen(false)}>×</button></header><div className={styles.statusList}>{Object.entries(tmsStatuses).map(([key,status])=><article key={key} className={styles[status.state]}><b>{status.state==="saved"?"✓":status.state==="error"?"!":status.state==="working"?"…":"•"}</b><span><strong>{{login:"Вход в TMS",cargo:"Грузы → Текущие",auto:"ТТН / CMR",companies:"Контрагенты",vehicles:"Автомашины",drivers:"Водители",points:"Географические объекты",contracts:"Договоры",apply:"Применение справочников"}[key]||key}</strong><small>{status.state==="queued"?"В очереди":status.state==="working"?"Загружается":status.state==="saved"?"Готово":"Ошибка"}{status.count?` · ${status.count.toLocaleString("ru-RU")} строк`:""}</small>{status.state==="working"&&<progress value={status.progress??35} max={100}/>}</span><em>{status.message}</em></article>)}</div><footer><span>{Object.values(tmsStatuses).filter(item=>item.state==="saved").length} из {Object.keys(tmsStatuses).length} этапов завершено</span><button onClick={()=>setTmsModalOpen(false)}>{tmsBusy?"Скрыть окно":"Закрыть"}</button></footer></section></div>}
     {statusModalOpen && <div className={styles.modalBackdrop}><section className={styles.statusModal} role="dialog" aria-modal="true" aria-label="Статус формирования документов"><header><div><small>ФОРМИРОВАНИЕ ДОКУМЕНТОВ</small><h2>{generating==="all" ? "Документы формируются" : "Результат формирования"}</h2><p>{bulkProgress || message}</p></div><button onClick={()=>setStatusModalOpen(false)} disabled={generating==="all"}>×</button></header><div className={styles.statusList}>{Object.entries(docStatuses).map(([key,status])=><article key={key} className={styles[status.state]}><b>{status.state==="saved"?"✓":status.state==="error"?"!":status.state==="working"?"…":"•"}</b><span><strong>{keyContainer(key)}</strong><small>{kindTitle(key)}</small></span><em title={status.text}>{status.text}</em></article>)}</div><footer><span>{Object.values(docStatuses).filter(item=>item.state==="saved").length} сохранено · {Object.values(docStatuses).filter(item=>item.state==="error").length} ошибок</span><button onClick={()=>setStatusModalOpen(false)} disabled={generating==="all"}>{generating==="all"?"Дождитесь завершения":"Закрыть"}</button></footer></section></div>}
     {konturTransfer.open && <div className={styles.modalBackdrop}><section className={styles.statusModal} role="dialog" aria-modal="true" aria-label="Статус передачи в Контур"><header><div><small>ПЕРЕДАЧА В КОНТУР</small><h2>{konturTransfer.container} · {konturTransfer.documentTitle}</h2><p>{konturTransfer.summary}</p></div><button onClick={()=>setKonturTransfer(current=>({...current,open:false}))}>×</button></header><div className={styles.statusList}>{(["xml","connection","draft"] as TransferStepKey[]).map(step=>{const status=konturTransfer.steps[step];const title={xml:"Формирование XML",connection:"Подключение к Контур",draft:"Создание черновика"}[step];return <article key={step} className={styles[status.state]}><b>{status.state==="saved"?"✓":status.state==="error"?"!":status.state==="working"?"…":"•"}</b><span><strong>{title}</strong><small>{status.state==="queued"?"Ожидает":status.state==="working"?"Выполняется":status.state==="saved"?"Готово":"Ошибка"}</small></span><em title={status.message}>{status.message}</em></article>;})}</div><footer><span>{Object.values(konturTransfer.steps).filter(item=>item.state==="saved").length} из 3 этапов завершено</span><button onClick={()=>setKonturTransfer(current=>({...current,open:false}))}>{konturTransfer.busy?"Скрыть окно":"Закрыть"}</button></footer></section></div>}
