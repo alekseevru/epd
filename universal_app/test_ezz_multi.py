@@ -1,6 +1,6 @@
 import unittest
 import xml.etree.ElementTree as ET
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 from data_sources import Catalogs
@@ -23,15 +23,21 @@ class MultiOrderTests(unittest.TestCase):
         self.assertEqual([item.find("МасГруз").get("МасБрутЗнач") for item in cargo], ["9720", "3500"])
         self.assertEqual(ET.fromstring(content).find(".//СодИнфГО").get("НомЗак"), "GROUP-001")
 
-    def test_server_generator_accepts_same_route_and_party(self):
+    def test_server_generator_accepts_different_unloading_dates(self):
         self.first["carrier"]["inn"] = "7700000000"
         self.first["client"]["inn"] = "7734515704"
         self.first["carrier_edo"] = "carrier-box"
         self.first["client_edo"] = "client-box"
         self.second["carrier_edo"] = "carrier-box"
         self.second["client_edo"] = "client-box"
+        self.second["planned_arrival_datetime"] += timedelta(days=1)
         _, content = ServerGenerator(Path(__file__).parent / "resources", Catalogs()).ezz_multi([self.first, self.second])
         self.assertEqual(len(ET.fromstring(content).findall(".//СодИнфГО/ОпГруз")), 2)
+
+    def test_different_vehicle_submission_times_are_rejected(self):
+        second = {**self.second, "planned_departure_datetime": self.first["planned_departure_datetime"] + timedelta(hours=1)}
+        with self.assertRaisesRegex(ValueError, "дата или время подачи ТС"):
+            ServerGenerator.validate_ezz_group([self.first, second])
 
     def test_route_mismatch_is_rejected(self):
         second = {**self.second, "delivery":"Другой адрес"}
