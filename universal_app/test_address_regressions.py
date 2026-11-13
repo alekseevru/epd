@@ -246,9 +246,11 @@ class AddressRegressions(unittest.TestCase):
                         self.assertIsNone(truck.find("ОснАрЛиз"))
                         self.assertEqual(trailer.get("ТипВлад"), code)
                         self.assertIsNone(trailer.find("ОснАрЛиз"))
-                        self.assertTrue(any("заполните договор вручную" in warning
+                        with self.assertRaisesRegex(ValueError, "номер и дата договора аренды или лизинга"):
+                            ServerGenerator._validate(context, empty=empty)
+                        self.assertTrue(any("заполните недостающие реквизиты договора" in warning
                                             for warning in ServerGenerator.warnings(context, empty=empty)))
-                    self.assertFalse(any("заполните договор вручную" in warning
+                    self.assertFalse(any("заполните недостающие реквизиты договора" in warning
                                          for warning in ServerGenerator.warnings(context, ezz=True)))
         self.assertIsNone(vehicle_ownership_details({"Тип владения": "Собственность", "Примечание": ""}))
 

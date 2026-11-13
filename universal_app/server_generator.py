@@ -42,6 +42,10 @@ class Generator(BaseGenerator):
             missing.append("автомобиль")
         if not ezz and ctx["truck_number"] and not vehicle_ownership_kind((ctx.get("truck_vehicle") or {}).get("Тип владения")):
             missing.append(f"тип владения ТС {ctx['truck_number']} в справочнике автомашин")
+        if not ezz:
+            ownership = vehicle_ownership_details(ctx.get("truck_vehicle") or {})
+            if ownership and not all(ownership.get(field) for field in ("number", "date", "owner_inn")):
+                missing.append("номер и дата договора аренды или лизинга, ИНН владельца ТС")
         if empty and not ctx["stock"]:
             missing.append("контейнерный сток")
         if empty and ctx["stock"] and not ctx.get("stock_party", {}).get("inn"):
@@ -55,11 +59,13 @@ class Generator(BaseGenerator):
         if ezz and (not ctx.get("loading_owner", {}).get("inn") or not ctx.get("loading_owner", {}).get("name")):
             warnings.append("В справочнике не заполнены название или ИНН владельца точки погрузки. Заполните сведения о владельце вручную в заявке перед подписанием.")
         if not ezz:
+            if ctx.get("truck_number") and not vehicle_ownership_kind((ctx.get("truck_vehicle") or {}).get("Тип владения")):
+                warnings.append("Тип владения тягачом не подтверждён в TMS. Укажите его вручную; для прицепа применяется тот же тип.")
             if ctx.get("truck_contract_ambiguous"):
                 warnings.append("Для автомобиля найдены несколько карточек с одинаковым типом владения, но разными договорами. Тип владения сохранён; реквизиты договора нужно проверить и заполнить вручную перед подписанием.")
             ownership = vehicle_ownership_details(ctx.get("truck_vehicle") or {})
             if ownership and not all(ownership.get(field) for field in ("number", "date", "owner_inn")):
-                warnings.append("Для автомобиля указана аренда или лизинг, но в примечании нет полного набора реквизитов договора (номер, дата и ИНН владельца). Тип владения сохранён; заполните договор вручную в черновике ЭТрН перед подписанием.")
+                warnings.append("Для аренды или лизинга заполните недостающие реквизиты договора: номер, дату и ИНН владельца ТС.")
             if not ctx.get("client", {}).get("phone"):
                 warnings.append("В справочнике организаций не заполнен телефон заказчика.")
             if not empty and not ctx.get("consignee", {}).get("phone"):

@@ -4,6 +4,15 @@ from manual_corrections import prepare_manual_fields
 from xml_generator import vehicle_ownership_details
 
 
+class ManualOwnershipTests(unittest.TestCase):
+    def test_missing_ownership_can_be_entered_manually(self):
+        ctx = {"truck_number": "О131АС198", "truck_vehicle": {}}
+        fields, _ = prepare_manual_fields(ctx, "cargo")
+        self.assertIn("vehicle.ownership", {field["id"] for field in fields})
+        prepare_manual_fields(ctx, "cargo", submitted={"vehicle.ownership": "Аренда"})
+        self.assertEqual(ctx["truck_vehicle"]["Тип владения"], "Аренда")
+
+
 def context(note="", client_phone=""):
     return {
         "container": "MODU0025866", "truck_number": "Х917ХК152",

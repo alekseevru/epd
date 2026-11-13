@@ -3,7 +3,7 @@
 import re
 from datetime import datetime
 
-from data_sources import clean
+from data_sources import clean, vehicle_ownership_kind
 from xml_generator import vehicle_ownership_details
 
 
@@ -29,6 +29,10 @@ def prepare_manual_fields(ctx, kind, stored=None, submitted=None):
         fields.append({"id": field_id, "label": label, "hint": hint})
 
     if kind != "order":
+        if truck:
+            vehicle = ctx.get("truck_vehicle") or {}
+            ctx["truck_vehicle"] = vehicle
+            add("vehicle.ownership", "Тип владения тягачом", vehicle_scope, "ownership", vehicle_ownership_kind(vehicle.get("Тип владения")), lambda v: vehicle.__setitem__("Тип владения", vehicle_ownership_kind(v)), lambda v: v.casefold() in {"собственность", "аренда", "лизинг"}, "Собственность, Аренда или Лизинг")
         ownership = vehicle_ownership_details(ctx.get("truck_vehicle") or {})
         if ownership:
             vehicle = ctx["truck_vehicle"]
