@@ -11,6 +11,35 @@ from manual_corrections import prepare_manual_fields
 
 
 class AddressRegressions(unittest.TestCase):
+    def test_duplicate_vehicle_cards_preserve_shared_rental_without_guessing_contract(self):
+        catalogs = Catalogs()
+        catalogs.vehicles = [
+            {"Государственный номер": "X934AH198", "Тип владения": "Аренда", "Примечание": "№1 от01.01.2026 ИНН 7701234567"},
+            {"Государственный номер": "Х934АН198", "Тип владения": "Аренда", "Примечание": "№2 от02.02.2026 ИНН 7701234567"},
+        ]
+        vehicle = catalogs.vehicle("Х934АН198")
+        self.assertEqual(vehicle["Тип владения"], "Аренда")
+        self.assertTrue(vehicle["_contract_ambiguous"])
+        generator = Generator(Path(__file__).parent / "resources", catalogs)
+        context = generator.context({"_container": "UETU5488899", "Номер автомашины": "Х934АН198", "Номер прицепа": "ВР615678"}, date(2026, 10, 13), "Иванов Иван Иванович")
+        self.assertTrue(context["truck_contract_ambiguous"])
+        root = ET.fromstring(generator.etrn(context)[1])
+        self.assertEqual(root.find(".//СвТС/ТС").get("ТипВлад"), "3")
+        self.assertEqual(root.find(".//СвТС/Прицеп").get("ТипВлад"), "3")
+        self.assertIsNone(root.find(".//СвТС/ТС/ОснАрЛиз"))
+
+    def test_conflicting_vehicle_ownership_never_defaults_to_property(self):
+        catalogs = Catalogs()
+        catalogs.vehicles = [
+            {"Государственный номер": "X934AH198", "Тип владения": "Аренда"},
+            {"Государственный номер": "Х934АН198", "Тип владения": "Собственность"},
+        ]
+        self.assertIsNone(catalogs.vehicle("Х934АН198"))
+        generator = Generator(Path(__file__).parent / "resources", catalogs)
+        context = generator.context({"_container": "UETU5488899", "Номер автомашины": "Х934АН198"}, date(2026, 10, 13), "Иванов Иван Иванович")
+        with self.assertRaisesRegex(ValueError, "не указан подтверждённый тип владения"):
+            generator.etrn(context)
+
     def test_forwarding_departure_uses_tms_planned_date(self):
         generator = Generator(Path(__file__).parent / "resources", Catalogs())
         context = generator.context({"_container": "NEPU4547487", "Плановая дата отправления": "2026-11-13T08:00:00"}, date(2026, 11, 12), "Иванов Иван Иванович")

@@ -9,7 +9,7 @@ import xml.etree.ElementTree as ET
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
-from data_sources import Catalogs, clean, normalize_name, value
+from data_sources import Catalogs, clean, normalize_name, value, vehicle_ownership_kind
 from address_xml import append_gar, complete_gar, known_gar
 
 TAGLEX = {
@@ -654,6 +654,8 @@ class Generator:
             "truck_number": normalize_vehicle_number(truck_number or truck.get("Государственный номер")),
             "truck_brand": clean(truck.get("Марка")) or "Тягач",
             "truck_vehicle": {"Тип владения": truck.get("Тип владения"), "Примечание": truck.get("Примечание")},
+            "truck_vehicle_matches": len(self.catalogs.vehicle_matches(truck_number)),
+            "truck_contract_ambiguous": bool(truck.get("_contract_ambiguous")),
             "trailer": normalize_vehicle_number(value(row, "Номер прицепа")),
             "weight": clean(value(row, "Вес брутто")) or "0",
             "seals": ", ".join(dict.fromkeys(filter(None, [clean(value(row, "Номер пломбы")), clean(value(row, "Номер пломбы 2"))]))),
@@ -781,8 +783,12 @@ class Generator:
         for previous in truck.findall("ОснАрЛиз"):
             truck.remove(previous)
         ownership = vehicle_ownership_details(ctx.get("truck_vehicle") or {})
+        ownership_kind = vehicle_ownership_kind((ctx.get("truck_vehicle") or {}).get("Тип владения"))
+        if ctx["truck_number"] and not ownership_kind:
+            raise ValueError(f"Для ТС {ctx['truck_number']} не указан подтверждённый тип владения в справочнике автомашин. Проверьте карточки TMS и обновите справочник.")
+        if ownership_kind:
+            truck.set("ТипВлад", {"Собственность": "1", "Аренда": "3", "Лизинг": "4"}[ownership_kind])
         if ownership:
-            truck.set("ТипВлад", ownership["ownership_code"])
             if ownership.get("number") and ownership.get("date") and ownership.get("owner_inn"):
                 basis = ET.SubElement(truck, "ОснАрЛиз", {
                     "НаимДок": ownership["contract_title"],
@@ -793,7 +799,7 @@ class Generator:
                 ET.SubElement(ET.SubElement(basis, "ИдРекСост"), taxpayer).text = ownership["owner_inn"]
         trailer = info.find("СвТС/Прицеп")
         trailer.set("РегНомер", ctx["trailer"] or "ОТСУТСТВУЕТ")
-        trailer.set("ТипВлад", truck.get("ТипВлад", "1"))
+        trailer.set("ТипВлад", truck.get("ТипВлад"))
         for previous in trailer.findall("ОснАрЛиз"):
             trailer.remove(previous)
         for basis in truck.findall("ОснАрЛиз"):

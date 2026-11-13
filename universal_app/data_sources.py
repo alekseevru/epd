@@ -34,6 +34,22 @@ def normalize_container(value) -> str:
     return "".join(match.groups()) if match else ""
 
 
+def normalize_vehicle_registration(value) -> str:
+    number = re.sub(r"[^A-ZА-Я0-9]", "", clean(value).upper())
+    return number.translate(str.maketrans("АВСЕНКМОРТХУ", "ABCEHKMOPTXY"))
+
+
+def vehicle_ownership_kind(value) -> str:
+    kind = clean(value).upper().replace("Ё", "Е")
+    if "АРЕНД" in kind or kind == "3":
+        return "Аренда"
+    if "ЛИЗИНГ" in kind or kind == "4":
+        return "Лизинг"
+    if "СОБСТВЕН" in kind or kind == "1":
+        return "Собственность"
+    return ""
+
+
 def _column_index(reference: str) -> int:
     result = 0
     for char in re.match(r"[A-Z]+", reference).group():
@@ -252,13 +268,28 @@ class Catalogs:
 
         return max(carrier_matches, key=rank)
 
+    def vehicle_matches(self, number: str) -> list[dict]:
+        key = normalize_vehicle_registration(number)
+        return [row for row in self.vehicles if key and normalize_vehicle_registration(row.get("Государственный номер")) == key]
+
     def vehicle(self, number: str) -> dict | None:
-        key = re.sub(r"[^A-ZА-Я0-9]", "", clean(number).upper())
-        matches = [
-            row for row in self.vehicles
-            if re.sub(r"[^A-ZА-Я0-9]", "", clean(row.get("Государственный номер")).upper()) == key
-        ]
-        return matches[0] if len(matches) == 1 else None
+        matches = self.vehicle_matches(number)
+        if len(matches) == 1:
+            return matches[0]
+        if not matches:
+            return None
+        kinds = {vehicle_ownership_kind(row.get("Тип владения")) for row in matches}
+        if len(kinds) != 1 or not next(iter(kinds)):
+            return None
+        # A shared ownership type is safe to use; conflicting contracts are not.
+        common = {"Государственный номер": number, "Тип владения": next(iter(kinds)), "_duplicate_count": len(matches)}
+        for field in ("Марка", "Примечание"):
+            values = {clean(row.get(field)) for row in matches}
+            if len(values) == 1:
+                common[field] = next(iter(values))
+        if "Примечание" not in common:
+            common["_contract_ambiguous"] = True
+        return common
 
     def container_stocks(self) -> list[dict]:
         return [row for row in self.points if "контейнерный сток" in clean(row.get("Роли")).lower()]
