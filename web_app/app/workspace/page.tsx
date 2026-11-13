@@ -418,13 +418,15 @@ export default function Workspace() {
         return {response,result:await response.json()};
       };
       let {response,result} = await requestDocument();
-      if (result.requiresConfirmation) {
+      let previousChoice: Exclude<WarningChoice,null> | undefined;
+      while (result.requiresConfirmation) {
         const warnings = result.warnings as string[];
-        const choice=await requestWarningConfirmation(trip._container,kind,warnings,result.editableFields as EditableField[]||[]);
+        const choice=await requestWarningConfirmation(trip._container,kind,warnings,result.editableFields as EditableField[]||[],Boolean(previousChoice));
         if (!choice) {
           throw new Error("Формирование отменено: необходимо дополнить данные");
         }
-        ({response,result} = await requestDocument(true,choice));
+        previousChoice={...choice,manualValues:{...previousChoice?.manualValues,...choice.manualValues},saveManualValues:previousChoice?.saveManualValues||choice.saveManualValues};
+        ({response,result} = await requestDocument(true,previousChoice));
       }
       if (!response.ok || result.error) throw new Error(result.error || "Не удалось сформировать документ");
       return result as {content:string;filename:string;recipientBoxId?:string};
@@ -664,14 +666,14 @@ export default function Workspace() {
     </section>
     {warningDialog.open && <div className={`${styles.modalBackdrop} ${styles.warningBackdrop}`}>
       <section className={`${styles.statusModal} ${styles.warningGuide}`} role="dialog" aria-modal="true" aria-label="Проверка данных перед формированием">
-        <header><div><small>ТРЕБУЕТСЯ ПРОВЕРКА</small><h2>{warningDialog.container}</h2><p>{warningDialog.required?"Для поручения экспедитору укажите дату отправления из подтверждённых данных перевозки.":"Недостающие сведения можно указать сейчас или выгрузить XML без них."}</p></div><button aria-label="Закрыть" onClick={()=>closeWarningDialog(null)}>×</button></header>
+        <header><div><small>ТРЕБУЕТСЯ ПРОВЕРКА</small><h2>{warningDialog.container}</h2><p>{warningDialog.required?"Заполните обязательные поля перед формированием документа.":"Недостающие сведения можно указать сейчас. Обязательные поля портал запросит перед формированием."}</p></div><button aria-label="Закрыть" onClick={()=>closeWarningDialog(null)}>×</button></header>
         <div className={styles.warningGuideBody}>
           <ol>{warningDialog.warnings.map((warning,index)=><li key={index}>{warning}</li>)}</ol>
           {warningDialog.fields.length>0&&<section className={styles.warningEdit}><h3>Заполнить вручную</h3><div>{warningDialog.fields.map(field=><label key={field.id}><span>{field.label}</span><input type={field.inputType||"text"} value={warningValues[field.id]||""} placeholder={field.hint||"Введите значение"} onChange={event=>{setWarningValues(current=>({...current,[field.id]:event.target.value}));setWarningInputError("");}}/></label>)}</div>{!warningDialog.required&&<><label className={styles.warningRemember}><input type="checkbox" checked={rememberWarnings} onChange={event=>setRememberWarnings(event.target.checked)}/> Запомнить исправления для следующих документов</label><p>Сохранённое подставляется только при отсутствии данных в TMS. Новые значения TMS всегда имеют приоритет.</p></>}</section>}
           {warningInputError&&<p className={styles.warningInputError} role="alert">{warningInputError}</p>}
           {warningDialog.fields.length===0&&<p>Эти сведения пока нельзя изменить здесь. Проверьте черновик в Контуре перед подписанием.</p>}
         </div>
-        <footer><span>{warningDialog.required?"Дата не сохраняется для других перевозок.":"Неполный XML может потребовать правки в Контуре."}</span><div><button className={styles.cancelButton} onClick={()=>closeWarningDialog(null)}>Отменить</button>{!warningDialog.required&&<button className={styles.cancelButton} onClick={()=>closeWarningDialog({manualValues:{},saveManualValues:false})}>Выгрузить XML как есть</button>}{warningDialog.fields.length>0&&<button onClick={applyWarningValues}>Сохранить и сформировать XML</button>}</div></footer>
+        <footer><span>{warningDialog.required?"Проверьте введённые данные.":"Неполный XML может потребовать правки в Контуре."}</span><div><button className={styles.cancelButton} onClick={()=>closeWarningDialog(null)}>Отменить</button>{!warningDialog.required&&<button className={styles.cancelButton} onClick={()=>closeWarningDialog({manualValues:{},saveManualValues:false})}>Продолжить без заполнения</button>}{warningDialog.fields.length>0&&<button onClick={applyWarningValues}>Сохранить и сформировать XML</button>}</div></footer>
       </section>
     </div>}
     {tmsModalOpen && <div className={styles.modalBackdrop}><section className={styles.statusModal} role="dialog" aria-modal="true" aria-label="Статус обновления TMS"><header><div><small>ОБНОВЛЕНИЕ ИЗ TMS</small><h2>{tmsBusy?"Получаем актуальные данные":tmsStatusItems.some(item=>item.state==="error")?"Не удалось обновить данные":"Обновление завершено"}</h2><p>{tmsBusy?"В каждой строке показано, какой реестр сейчас читается и сколько строк уже получено.":message}</p></div><button onClick={()=>setTmsModalOpen(false)}>×</button></header><div className={styles.statusList}>{Object.entries(tmsStatuses).map(([key,status])=><article key={key} className={styles[status.state]}><b>{status.state==="saved"?"✓":status.state==="error"?"!":status.state==="working"?"…":"•"}</b><span><strong>{{login:"Вход в TMS",cargo:"Грузы → Текущие",auto:"ТТН / CMR",companies:"Контрагенты",vehicles:"Автомашины",drivers:"Водители",points:"Географические объекты",contracts:"Договоры",apply:"Применение справочников"}[key]||key}</strong><small>{status.state==="queued"?"В очереди":status.state==="working"?"Загружается":status.state==="saved"?"Готово":"Ошибка"}{status.count?` · ${status.count.toLocaleString("ru-RU")} строк`:""}</small>{status.state==="working"&&<progress value={status.progress??35} max={100}/>}</span><em>{status.message}</em></article>)}</div><footer><span>{Object.values(tmsStatuses).filter(item=>item.state==="saved").length} из {Object.keys(tmsStatuses).length} этапов завершено</span><button onClick={()=>setTmsModalOpen(false)}>{tmsBusy?"Скрыть окно":"Закрыть"}</button></footer></section></div>}

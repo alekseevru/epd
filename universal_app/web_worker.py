@@ -421,6 +421,9 @@ def handle(request):
         if role in {"client", "consignee", "carrier"} and clean(participant_id):
             ctx[f"{role}_edo"] = clean(participant_id)
     warnings = generator.warnings(ctx, empty=kind == "empty", ezz=kind == "order")
+    required_vehicle_fields = [field for field in editable_fields if field["id"].startswith("vehicle.")]
+    if required_vehicle_fields and request.get("confirmWarnings"):
+        return {"requiresConfirmation": True, "warnings": warnings, "editableFields": required_vehicle_fields}
     if warnings and not request.get("confirmWarnings"):
         return {"requiresConfirmation": True, "warnings": warnings, "editableFields": editable_fields}
     if kind == "cargo": filename, content = generator.etrn(ctx, False)
