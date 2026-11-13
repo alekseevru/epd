@@ -69,6 +69,7 @@ class AddressRegressions(unittest.TestCase):
         xml = ServerGenerator.forwarding_order_userdata(context, "Иванов Иван Иванович")
         root = ET.fromstring(xml)
         self.assertEqual(root.find(".//TransportInfo").get("BodyType"), "Тент")
+        self.assertEqual(root.find(".//CargoInfo").get("TransportationIndicator"), "0")
         self.assertEqual(root.find(".//ItemDescription").get("Name"), "Стальные изделия")
         self.assertIsNone(root.find(".//TransportContainer"))
         self.assertEqual(root.findtext(".//ItemDescription/Marks/Mark"), "Стальные изделия")
