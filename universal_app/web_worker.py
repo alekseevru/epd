@@ -10,7 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
-from data_sources import Catalogs, clean, normalize_name, read_counteragents, read_xlsx, value
+from data_sources import Catalogs, clean, normalize_name, read_counteragents, read_xlsx, value, vehicle_ownership_kind
 from server_generator import Generator
 from manual_corrections import prepare_manual_fields
 from container_types import body_type_from_ttn, container_iso_from_ttn, transport_mode_from_ttn
@@ -239,6 +239,13 @@ def handle(request):
             for record_id, cargo, auto in records:
                 resolved_cargo = dict(cargo) if cargo else (dict(auto) if auto else None)
                 resolved_auto = dict(auto) if auto else None
+                truck_number = clean(value(resolved_auto or {}, "Номер автомашины", "Транспортное средство"))
+                trailer_number = clean(value(resolved_auto or {}, "Номер прицепа"))
+                vehicle_matches = catalogs.vehicle_matches(truck_number)
+                vehicle = catalogs.vehicle(truck_number) or {}
+                ownership = vehicle_ownership_kind(vehicle.get("Тип владения"))
+                ownership_issue = ("Несколько карточек ТС с разным или неуказанным типом владения" if len(vehicle_matches) > 1 and not ownership
+                                   else "Тип владения ТС не указан в справочнике" if truck_number and not ownership else "")
                 if resolved_cargo and resolved_auto:
                     try:
                         context = generator.context({**resolved_cargo, **resolved_auto, "_container":container_number}, date.today(), clean(request.get("user")) or "Пользователь", None)
@@ -246,7 +253,7 @@ def handle(request):
                             resolved_auto["Адрес места отправления"] = context["loading"]
                     except Exception:
                         pass
-                items.append({"container":container_number, "recordId":record_id, "recordCount":len(records), "cargo":resolved_cargo, "auto":resolved_auto, "missingCargo":not resolved_cargo, "missingAuto":not auto, "cargoSource":"cargo" if cargo else ("auto" if auto else "missing"), "transportMode":transport_mode_from_ttn(resolved_auto or {})})
+                items.append({"container":container_number, "recordId":record_id, "recordCount":len(records), "cargo":resolved_cargo, "auto":resolved_auto, "missingCargo":not resolved_cargo, "missingAuto":not auto, "cargoSource":"cargo" if cargo else ("auto" if auto else "missing"), "transportMode":transport_mode_from_ttn(resolved_auto or {}), "truckOwnership":ownership, "trailerOwnership":ownership if trailer_number else "", "vehicleOwnershipIssue":ownership_issue, "vehicleMatches":len(vehicle_matches), "vehicleContractAmbiguous":bool(vehicle.get("_contract_ambiguous"))})
         return {"items":items}
     if action == "search_orders":
         needle = clean(request.get("query")).casefold()
