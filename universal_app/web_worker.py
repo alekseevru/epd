@@ -328,7 +328,7 @@ def handle(request):
             return {"requiresConfirmation": True,
                     "warnings": [f"Для {container} в ТТН/CMR не указана плановая дата отправления. Укажите её вручную." for container in missing],
                     "editableFields": [{"id": f"plannedDepartureDate:{container}", "label": f"Дата отправления {container}", "inputType": "date"} for container in missing]}
-        return {"ready": True}
+        return {"departureChecked": True}
     if action == "forwarding_userdata_multi":
         containers = [clean(item) for item in request.get("containers", []) if clean(item)]
         services = list(dict.fromkeys(clean(item) for item in request.get("services", []) if clean(item)))
