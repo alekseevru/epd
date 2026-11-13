@@ -71,7 +71,8 @@ class AddressRegressions(unittest.TestCase):
         self.assertEqual(root.find(".//TransportInfo").get("BodyType"), "Тент")
         self.assertEqual(root.find(".//ItemDescription").get("Name"), "Стальные изделия")
         self.assertIsNone(root.find(".//TransportContainer"))
-        self.assertIsNone(root.find(".//Marks"))
+        self.assertEqual(root.findtext(".//ItemDescription/Marks/Mark"), "Стальные изделия")
+        self.assertEqual([child.tag for child in root.find(".//ItemDescription")], ["Marks", "CargoOriginCountryInfo", "CargoWeight"])
         self.assertNotIn("Контейнер", xml)
 
     def test_missing_loading_point_owner_prompts_for_blank_manual_fields(self):

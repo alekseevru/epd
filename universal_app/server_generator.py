@@ -214,8 +214,7 @@ class Generator(BaseGenerator):
             ET.SubElement(cargo,"BatchWeight",{"NetWeight":weight,"GrossWeight":weight})
             descriptions=ET.SubElement(cargo,"ItemDescriptions")
             item=ET.SubElement(descriptions,"ItemDescription",{"Name":cargo_ctx.get("cargo_name") or f"Контейнер {cargo_ctx['container']}","CargoSpaceQuantity":"1","HasDangerous":"0","HasRestrictedItems":"0","CanSpecifyVolume":"0","IsForStateSystemRegistration":"0","HasPackaging":"0","HasCommodityCode":"0"})
-            if not non_container:
-                ET.SubElement(ET.SubElement(item,"Marks"),"Mark").text=cargo_ctx["container"]
+            ET.SubElement(ET.SubElement(item,"Marks"),"Mark").text = cargo_ctx["cargo_name"] if non_container else cargo_ctx["container"]
             origin=ET.SubElement(item,"CargoOriginCountryInfo")
             ET.SubElement(origin,"Country").text="643"
             ET.SubElement(item,"CargoWeight",{"NetWeight":weight,"GrossWeight":weight})
