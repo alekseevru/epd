@@ -189,6 +189,7 @@ class Generator(BaseGenerator):
         order = ET.SubElement(root, "ClientForwarderOrder")
         cargo_infos = ET.SubElement(order, "CargoInfos")
         for cargo_index, cargo_ctx in enumerate(contexts, start=1):
+            non_container = cargo_ctx.get("transport_mode") == "non_container"
             delivery_datetime = cargo_ctx.get("forwarding_delivery_datetime")
             delivery_time = delivery_datetime.strftime("%H:%M") if delivery_datetime else ""
             cargo = ET.SubElement(cargo_infos, "CargoInfo", {
@@ -197,14 +198,13 @@ class Generator(BaseGenerator):
                 **({"DeliveryFromDate":delivery_datetime.strftime("%d.%m.%Y"),
                     "DeliveryToDate":delivery_datetime.strftime("%d.%m.%Y"),
                     "DeliveryTime":f"{delivery_time}-{delivery_time}+03:00"} if delivery_datetime else {}),
-                "TransportationIndicator":"1", "CargoBatchId":str(uuid.uuid4()), "ShipmentCargoSpaceQuantity":"1", "NotifyReq":"0",
+                "TransportationIndicator":"0" if non_container else "1", "CargoBatchId":str(uuid.uuid4()), "ShipmentCargoSpaceQuantity":"1", "NotifyReq":"0",
                 **({"CargoRoute":str(cargo_ctx["cargo_route"])[:1000]} if cargo_ctx.get("cargo_route") else {}),
                 **({"AcceptReq":"1"} if carrier_forwarder else {}),
             })
             org(ET.SubElement(cargo,"Consignee"),cargo_ctx["consignee"],cargo_ctx.get("consignee_edo",""))
             shipper = TAGLEX if carrier_forwarder else cargo_ctx.get("order_shipper") or (cargo_ctx.get("loading_owner") if (cargo_ctx.get("loading_owner") or {}).get("inn") else cargo_ctx["client"])
             org(ET.SubElement(cargo,"Shipper"),shipper)
-            non_container = cargo_ctx.get("transport_mode") == "non_container"
             if non_container and not cargo_ctx.get("cargo_name"):
                 raise ValueError("для перевозки без контейнера укажите наименование груза")
             ET.SubElement(ET.SubElement(cargo,"TransportInfos"),"TransportInfo",{"TransportType":"1","BodyType":(cargo_ctx.get("body_type") or "Тент") if non_container else "Контейнеровоз"})
