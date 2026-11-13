@@ -16,6 +16,7 @@ import { isInternationalTruckUnit } from "./statistics-unit-filter.mjs";
 import { hasWeeklySnapshot, mondayKey, recordWeeklyStatistics } from "./statistics-weekly.mjs";
 import { isCarrierTitle4Signed } from "./statistics-title4.mjs";
 import { forwardingDirection } from "./kontur-document-direction.mjs";
+import { isGeneratorStartupMessage } from "./generator-worker-protocol.mjs";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const appPackage = JSON.parse(fs.readFileSync(path.join(root,"package.json"),"utf8"));
@@ -524,7 +525,7 @@ function startGeneratorWorker(){
   generatorWorker.stdout.setEncoding("utf8");
   generatorWorker.stdout.on("data",chunk=>{
     workerBuffer+=chunk; const lines=workerBuffer.split(/\r?\n/); workerBuffer=lines.pop()||"";
-    for(const line of lines){if(!line.trim())continue;try{const result=JSON.parse(line);if(result.ready)continue;const item=pending.get(result.requestId);if(item){pending.delete(result.requestId);item(result);}}catch{}}
+    for(const line of lines){if(!line.trim())continue;try{const result=JSON.parse(line);if(isGeneratorStartupMessage(result))continue;const item=pending.get(result.requestId);if(item){pending.delete(result.requestId);item(result);}}catch{}}
   });
   generatorWorker.on("error",error=>failPendingDocuments("Не удалось запустить генератор XML: "+error.message));
   generatorWorker.on("exit",code=>{if(code)failPendingDocuments("Генератор XML остановился с кодом "+code);});
