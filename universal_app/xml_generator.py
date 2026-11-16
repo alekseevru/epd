@@ -699,8 +699,26 @@ class Generator:
         # физический адрес доставки терминала.
         consignee = TAGLEX if empty else ctx["consignee"]
         consignee_edo = TAGLEX["edo"] if empty else ctx["consignee_edo"]
+        client = ctx.get("client") or {}
+        client_inn = clean(client.get("inn"))
+        client_edo = clean(ctx.get("client_edo"))
+        group_inns = {AGM_INN, AGS_INN, AGRL_INN}
+        group_names = {"АГР", "АГРЛ", "АГМ", "АГС"}
+        special_group = any(
+            clean(party.get("inn")) in group_inns or normalize_name(party.get("name")) in group_names
+            for party in (client, ctx.get("consignee") or {})
+        )
+        add_client_observer = (
+            not special_group and client_inn and clean(consignee.get("inn"))
+            and client_inn not in {clean(consignee.get("inn")), clean(TAGLEX.get("inn")), clean((ctx.get("carrier") or {}).get("inn"))}
+            and client_edo and client_edo not in {consignee_edo, ctx["carrier_edo"], TAGLEX["edo"]}
+        )
+        if add_client_observer:
+            observer = ET.Element("ИдПолИной")
+            observer.text = client_edo
+            root.insert(0, observer)
         file_id = (
-            f"ON_TRNACLGROT_{ctx['carrier_edo']}_{consignee_edo}_{TAGLEX['edo']}_0_"
+            f"ON_TRNACLGROT_{ctx['carrier_edo']}_{consignee_edo}_{TAGLEX['edo']}_{1 if add_client_observer else 0}_"
             f"{ctx['date']:%Y%m%d}_{uuid.uuid4()}"
         )
         root.set("ИдФайл", file_id)

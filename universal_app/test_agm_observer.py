@@ -11,6 +11,7 @@ from xml_generator import AGRL_OBSERVER_EDO_ID
 class AgmObserverTests(unittest.TestCase):
     def setUp(self):
         catalogs = Catalogs()
+        catalogs.vehicles = [{"Государственный номер": "А123АА77", "Тип владения": "Собственность"}]
         catalogs.companies = [
             {"Наименование": "АГМ", "ИНН": "7817137260", "КПП": "781701001"},
             {"Наименование": "АГС", "ИНН": "7814858496", "КПП": "781401001"},
@@ -64,6 +65,17 @@ class AgmObserverTests(unittest.TestCase):
 
     def test_unrelated_waybill_has_no_observer(self):
         root = self.make_xml("Другой клиент", "Другой клиент")
+        self.assertEqual(root.findall("ИдПолИной"), [])
+
+    def test_different_client_is_observer(self):
+        self.generator.catalogs.companies.append({"Наименование": "Получатель", "ИНН": "7700000001"})
+        self.generator.catalogs.edo.append({"ИНН": "7700000001", "Идентификатор участника ЭДО": "recipient-box"})
+        root = self.make_xml("Другой клиент", "Получатель")
+        self.assertEqual(root.findtext("ИдПолИной"), "2BM-7700000000-770001001-000000000000000000001")
+        self.assertEqual(root.get("ИдФайл").rsplit("_", 3)[-3], "1")
+
+    def test_agrl_client_does_not_get_generic_observer(self):
+        root = self.make_xml("АГРЛ", "Другой клиент")
         self.assertEqual(root.findall("ИдПолИной"), [])
 
 
