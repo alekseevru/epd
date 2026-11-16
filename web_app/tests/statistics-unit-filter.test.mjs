@@ -1,6 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isInternationalTruckUnit } from "../statistics-unit-filter.mjs";
+import { isExpeditionOnlyTrip, isInternationalTruckUnit } from "../statistics-unit-filter.mjs";
+
+test("excludes TMS rows only when both truck and driver are missing", () => {
+  assert.equal(isExpeditionOnlyTrip({ "Клиент": "АГС" }), true);
+  assert.equal(isExpeditionOnlyTrip({ "Номер автомашины": " ", "Водитель": null }), true);
+  assert.equal(isExpeditionOnlyTrip({ "Клиент": "АГМ", "Номер автомашины": "Р737УХ198" }), false);
+  assert.equal(isExpeditionOnlyTrip({ "Водитель": "Иванов Иван" }), false);
+});
 
 test("excludes international truck identifiers from statistics", () => {
   assert.equal(isInternationalTruckUnit("HM6065/H038Y"), true);
