@@ -66,6 +66,7 @@ class AgmObserverTests(unittest.TestCase):
     def test_unrelated_waybill_has_no_observer(self):
         root = self.make_xml("Другой клиент", "Другой клиент")
         self.assertEqual(root.findall("ИдПолИной"), [])
+        self.assertEqual(root.find(".//СвГруз/ОпГруз").get("СостГруз"), "Отсутствие повреждений")
 
     def test_different_client_is_observer(self):
         self.generator.catalogs.companies.append({"Наименование": "Получатель", "ИНН": "7700000001"})
