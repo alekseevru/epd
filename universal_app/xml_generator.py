@@ -751,6 +751,8 @@ class Generator:
             else:
                 instructions.attrib.pop("СвПломба", None)
         cargo = info.find("СвГруз/ОпГруз")
+        if cargo.get("СостГруз") is not None:
+            cargo.set("СостГруз", cargo.get("СостГруз").rstrip())
         cargo.set("НаимГруз", ctx["cargo_name"] if ctx.get("transport_mode") == "non_container" else f"Порожний контейнер {ctx['container']}" if empty else f"Контейнер {ctx['container']}")
         packaging_method, package_type = cargo_packaging(ctx.get("client"))
         cargo.set("СпУпак", packaging_method)
