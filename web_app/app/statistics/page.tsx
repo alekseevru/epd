@@ -193,11 +193,15 @@ export default function Statistics(){
     setExporting(true);setError("");
     try{
       const XLSX=await import("xlsx");
-      const rows:(string|number)[][]=[["Период","Номер ЭТрН","Контейнеры","Перевозчик","Грузополучатель","Дата доставки","Ожидаем подпись от","Титул","Ссылка в Контур.Логистику"]];
-      for(const item of selected.filter(value=>!signedFlag(value)))rows.push([item.month,item.number,item.containers.join(", "),item.carrier,item.consignee,item.deliveryDate,audience==="carrier4"?"Перевозчик":!item.title1or2Signed?"Грузоотправитель":!item.carrierTitle2Signed?"Перевозчик":"Грузополучатель",`Т${titleNumber}`,item.documentUrl||""]);
+      const rows:(string|number)[][]=[["Период","Номер ЭТрН","Контейнеры","Перевозчик","Грузополучатель","Дата доставки","Кто подписывает титул","Титул","Ссылка в Контур.Логистику","Предыдущий этап"]];
+      for(const item of selected.filter(value=>!signedFlag(value))){
+        const signer=audience==="consignee"?"Грузополучатель":"Перевозчик";
+        const previousStage=audience==="consignee"&&!item.carrierTitle2Signed?"Т2 не подписан":audience==="carrier"&&!item.title1or2Signed?"Т1 не подписан":"";
+        rows.push([item.month,item.number,item.containers.join(", "),item.carrier,item.consignee,item.deliveryDate,signer,`Т${titleNumber}`,item.documentUrl||"",previousStage]);
+      }
       const workbook=XLSX.utils.book_new(),sheet=XLSX.utils.aoa_to_sheet(rows);
-      sheet["!cols"]=[{wch:13},{wch:27},{wch:28},{wch:42},{wch:42},{wch:18},{wch:25},{wch:10},{wch:70}];
-      sheet["!autofilter"]={ref:`A1:I${rows.length}`};
+      sheet["!cols"]=[{wch:13},{wch:27},{wch:28},{wch:42},{wch:42},{wch:18},{wch:25},{wch:10},{wch:70},{wch:23}];
+      sheet["!autofilter"]={ref:`A1:J${rows.length}`};
       XLSX.utils.book_append_sheet(workbook,sheet,`Не подписано Т${titleNumber}`);
       XLSX.writeFile(workbook,`unsigned-title-${titleNumber}-${month}.xlsx`);
     }catch(value){setError(value instanceof Error?value.message:"Не удалось выгрузить неподписанные ЭТрН");}
