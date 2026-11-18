@@ -24,7 +24,7 @@ export function hasWeeklySnapshot(file, now = new Date()) {
   } catch { return false; }
 }
 
-export function recordWeeklyStatistics(file, value, now = new Date()) {
+export function recordWeeklyStatistics(file, value, now = new Date(), expeditionOnlyIds = new Set()) {
   const week = mondayKey(now);
   const previousWeek = previousMondayKey(week);
   let stored = {};
@@ -39,5 +39,8 @@ export function recordWeeklyStatistics(file, value, now = new Date()) {
     fs.writeFileSync(`${file}.tmp`, JSON.stringify({...stored,[week]:current}));
     fs.renameSync(`${file}.tmp`, file);
   }
-  return {currentWeek:week,previousWeek,current,previous};
+  const filterTrips = snapshot => snapshot && Array.isArray(snapshot.tmsTrips)
+    ? {...snapshot,tmsTrips:snapshot.tmsTrips.filter(trip=>!expeditionOnlyIds.has(String(trip.id??"").trim()))}
+    : snapshot;
+  return {currentWeek:week,previousWeek,current:filterTrips(current),previous:filterTrips(previous)};
 }
