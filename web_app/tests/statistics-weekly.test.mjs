@@ -29,5 +29,16 @@ test("weekly comparison freezes the first successful snapshot of each week", () 
     assert.equal(fourth.previous.items[0].number,"B");
     assert.equal(fourth.current.items[0].number,"D");
     assert.equal(Object.keys(JSON.parse(fs.readFileSync(file,"utf8"))).length,3);
+    const legacyTrip = {id:"123",container:"TEST1234567"};
+    const unrelatedTrip = {id:"456",container:"TEST1234567"};
+    const sample = {items:[{number:"E"}],tmsTrips:[legacyTrip, unrelatedTrip]};
+    recordWeeklyStatistics(file,sample,new Date("2026-11-16T09:00:00Z"));
+    const nextWeek = new Date("2026-11-23T09:00:00Z");
+    recordWeeklyStatistics(file,sample,nextWeek);
+    const filtered = recordWeeklyStatistics(file,sample,nextWeek,new Set(["123"]));
+    assert.deepEqual(filtered.previous.tmsTrips,[unrelatedTrip]);
+    assert.deepEqual(filtered.current.tmsTrips,[unrelatedTrip]);
+    assert.deepEqual(filtered.previous.items,sample.items);
+    assert.deepEqual(JSON.parse(fs.readFileSync(file,"utf8"))["2026-11-16"].tmsTrips,sample.tmsTrips);
   }finally{fs.rmSync(dir,{recursive:true,force:true});}
 });
