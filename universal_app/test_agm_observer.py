@@ -36,6 +36,8 @@ class AgmObserverTests(unittest.TestCase):
             "Исполнитель": "Тестовый перевозчик",
             "Номер автомашины": "А123АА77",
         }, date(2026, 9, 17), "Иванов Иван Иванович", None)
+        if contractor:
+            ctx["carrier_contract"] = {"number":"CARRIER-42","date":"2026-09-01"}
         _, content = self.generator.contractor_etrn(ctx) if contractor else self.generator.etrn(ctx)
         return ET.fromstring(content)
 
@@ -87,7 +89,10 @@ class AgmObserverTests(unittest.TestCase):
         self.assertEqual(info.find("СвЗак//СвЮЛУч").get("ИННЮЛ"), TAGLEX["inn"])
         self.assertEqual(len(info.find("СвПер")), 0)
         self.assertEqual(set(n.text for n in root.findall("ИдПолИной")), {TAGLEX["edo"],"2BM-7700000000-770001001-000000000000000000001"})
-        self.assertIsNone(info.find("СвЗак/ДогУслПер"))
+        contract = info.find("СвЗак/ДогУслПер")
+        self.assertEqual(contract.get("НомерДок"), "CARRIER-42")
+        self.assertEqual(contract.get("ДатаДок"), "01.09.2026")
+        self.assertEqual({node.text for node in contract.findall("ИдРекСост/ИННЮЛ")}, {TAGLEX["inn"],"7800000000"})
 
     def test_contractor_keeps_agm_observer(self):
         root = self.make_xml("АГМ", "Другой клиент", contractor=True)

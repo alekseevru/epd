@@ -68,13 +68,13 @@ def prepare_manual_fields(ctx, kind, stored=None, submitted=None):
                 add("loading_owner.inn", "ИНН владельца пункта погрузки", scope, "inn", owner.get("inn"), lambda v: owner.__setitem__("inn", v), lambda v: bool(re.fullmatch(r"(?:\d{10}|\d{12})", v)))
                 add("loading_owner.address", "Юридический адрес владельца пункта погрузки", scope, "address", owner.get("address"), lambda v: owner.__setitem__("address", v), lambda v: len(v) >= 12)
             add("loading_owner.phone", "Телефон владельца пункта погрузки", scope, "phone", owner.get("phone"), lambda v: owner.__setitem__("phone", v), lambda v: len(re.sub(r"\D", "", v)) >= 10)
-    contract_role = "carrier" if kind == "order" else "client"
-    contract_key = "carrier_contract" if kind == "order" else "client_contract"
+    contract_role = "carrier" if kind in {"order", "contractor"} else "client"
+    contract_key = "carrier_contract" if kind in {"order", "contractor"} else "client_contract"
     if not ctx.get(contract_key):
         party = ctx.get(contract_role) or {}
         scope = f"party:{clean(party.get('inn'))}:{contract_role}:contract" if clean(party.get("inn")) else f"container:{container}:{contract_role}:contract"
         contract = {}
-        add(f"{contract_role}.contract_number", "Номер договора с " + ("перевозчиком" if kind == "order" else "заказчиком"), scope, "contract_number", "", lambda v: contract.__setitem__("number", v))
+        add(f"{contract_role}.contract_number", "Номер договора с " + ("перевозчиком" if contract_role == "carrier" else "заказчиком"), scope, "contract_number", "", lambda v: contract.__setitem__("number", v))
         add(f"{contract_role}.contract_date", "Дата договора", scope, "contract_date", "", lambda v: contract.__setitem__("date", datetime.strptime(v, "%d.%m.%Y").strftime("%Y-%m-%d")), lambda v: bool(re.fullmatch(r"\d{2}\.\d{2}\.\d{4}", v)) and _valid_date(v), "ДД.ММ.ГГГГ")
         if contract.get("number") and contract.get("date"):
             ctx[contract_key] = contract

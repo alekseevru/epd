@@ -4,7 +4,7 @@ import uuid
 from decimal import Decimal, InvalidOperation
 import xml.etree.ElementTree as ET
 
-from xml_generator import Generator as BaseGenerator, TAGLEX, address_attributes, vehicle_ownership_details, _set_legal, _serialize, AGM_INN, AGS_INN, AGRL_INN
+from xml_generator import Generator as BaseGenerator, TAGLEX, address_attributes, vehicle_ownership_details, _set_legal, _set_contract, _serialize, AGM_INN, AGS_INN, AGRL_INN
 from data_sources import clean, normalize_name
 from data_sources import vehicle_ownership_kind
 
@@ -112,11 +112,7 @@ class Generator(BaseGenerator):
         info = root.find("Документ/СодИнфГО")
         _set_legal(info.find("СвГО"), ctx["carrier"])
         _set_legal(info.find("СвЗак"), TAGLEX)
-        # The former customer contract must not become a Taglex contract.
-        customer = info.find("СвЗак")
-        for child in list(customer):
-            if child.tag == "ДогУслПер":
-                customer.remove(child)
+        _set_contract(info.find("СвЗак"), ctx.get("carrier_contract"), (TAGLEX["inn"], ctx["carrier"]["inn"]))
         carrier = info.find("СвПер")
         carrier.clear()
         special = any(
