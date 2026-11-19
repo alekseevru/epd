@@ -28,7 +28,7 @@ class AgmObserverTests(unittest.TestCase):
         ]
         self.generator = Generator(Path(__file__).parent / "resources", catalogs)
 
-    def make_xml(self, client, consignee):
+    def make_xml(self, client, consignee, contractor=False):
         ctx = self.generator.context({
             "_container": "TEST1234567",
             "Клиент": client,
@@ -36,7 +36,9 @@ class AgmObserverTests(unittest.TestCase):
             "Исполнитель": "Тестовый перевозчик",
             "Номер автомашины": "А123АА77",
         }, date(2026, 9, 17), "Иванов Иван Иванович", None)
-        _, content = self.generator.etrn(ctx)
+        if contractor:
+            ctx["carrier_contract"] = {"number":"CARRIER-42","date":"2026-09-01"}
+        _, content = self.generator.contractor_etrn(ctx) if contractor else self.generator.etrn(ctx)
         return ET.fromstring(content)
 
     def test_agm_client_has_agrl_observer(self):
@@ -78,6 +80,23 @@ class AgmObserverTests(unittest.TestCase):
     def test_agrl_client_does_not_get_generic_observer(self):
         root = self.make_xml("АГРЛ", "Другой клиент")
         self.assertEqual(root.findall("ИдПолИной"), [])
+
+    def test_contractor_roles_and_observers(self):
+        from xml_generator import TAGLEX
+        root = self.make_xml("Другой клиент", "Другой клиент", contractor=True)
+        info = root.find("Документ/СодИнфГО")
+        self.assertEqual(info.find("СвГО//СвЮЛУч").get("ИННЮЛ"), "7800000000")
+        self.assertEqual(info.find("СвЗак//СвЮЛУч").get("ИННЮЛ"), TAGLEX["inn"])
+        self.assertEqual(len(info.find("СвПер")), 0)
+        self.assertEqual(set(n.text for n in root.findall("ИдПолИной")), {TAGLEX["edo"],"2BM-7700000000-770001001-000000000000000000001"})
+        contract = info.find("СвЗак/ДогУслПер")
+        self.assertEqual(contract.get("НомерДок"), "CARRIER-42")
+        self.assertEqual(contract.get("ДатаДок"), "01.09.2026")
+        self.assertEqual({node.text for node in contract.findall("ИдРекСост/ИННЮЛ")}, {TAGLEX["inn"],"7800000000"})
+
+    def test_contractor_keeps_agm_observer(self):
+        root = self.make_xml("АГМ", "Другой клиент", contractor=True)
+        self.assertEqual([n.text for n in root.findall("ИдПолИной")],[AGRL_OBSERVER_EDO_ID])
 
 
 if __name__ == "__main__":
