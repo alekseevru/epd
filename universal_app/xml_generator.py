@@ -552,7 +552,7 @@ class Generator:
         driver_name = clean(value(row, "Водитель", "ФИО водителя"))
         driver = self.catalogs.driver(driver_name, carrier_name) or {}
         truck_number = clean(value(row, "Номер автомашины", "Транспортное средство"))
-        truck = self.catalogs.vehicle(truck_number) or {}
+        truck = self.catalogs.vehicle(truck_number, carrier_name) or {}
         route = clean(value(row, "Маршрут", "Маршрут груза"))
 
         def route_point_label(raw_value):
@@ -654,7 +654,7 @@ class Generator:
             "truck_number": normalize_vehicle_number(truck_number or truck.get("Государственный номер")),
             "truck_brand": clean(truck.get("Марка")) or "Тягач",
             "truck_vehicle": {"Тип владения": truck.get("Тип владения"), "Примечание": truck.get("Примечание")},
-            "truck_vehicle_matches": len(self.catalogs.vehicle_matches(truck_number)),
+            "truck_vehicle_matches": len(self.catalogs.vehicle_matches(truck_number, carrier_name)),
             "truck_contract_ambiguous": bool(truck.get("_contract_ambiguous")),
             "trailer": normalize_vehicle_number(value(row, "Номер прицепа")),
             "weight": clean(value(row, "Вес брутто")) or "0",
