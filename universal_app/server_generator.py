@@ -4,7 +4,8 @@ import uuid
 from decimal import Decimal, InvalidOperation
 import xml.etree.ElementTree as ET
 
-from xml_generator import Generator as BaseGenerator, TAGLEX, address_attributes, vehicle_ownership_details
+from xml_generator import Generator as BaseGenerator, TAGLEX, address_attributes, vehicle_ownership_details, _set_legal, _serialize, AGM_INN, AGS_INN, AGRL_INN
+from data_sources import clean, normalize_name
 from data_sources import vehicle_ownership_kind
 
 
@@ -104,6 +105,42 @@ class Generator(BaseGenerator):
     def etrn(self, ctx, empty=False):
         self._validate(ctx, empty=empty)
         return super().etrn(ctx, empty)
+
+    def contractor_etrn(self, ctx):
+        filename, content = self.etrn(ctx)
+        root = ET.fromstring(content)
+        info = root.find("Документ/СодИнфГО")
+        _set_legal(info.find("СвГО"), ctx["carrier"])
+        _set_legal(info.find("СвЗак"), TAGLEX)
+        # The former customer contract must not become a Taglex contract.
+        customer = info.find("СвЗак")
+        for child in list(customer):
+            if child.tag == "ДогУслПер":
+                customer.remove(child)
+        carrier = info.find("СвПер")
+        carrier.clear()
+        special = any(
+            clean(party.get("inn")) in {AGM_INN, AGS_INN, AGRL_INN}
+            or normalize_name(party.get("name")) in {"АГР", "АГРЛ", "АГМ", "АГС"}
+            for party in (ctx["client"], ctx["consignee"])
+        )
+        if not special:
+            for observer in list(root.findall("ИдПолИной")):
+                root.remove(observer)
+            for observer_id in dict.fromkeys([TAGLEX["edo"],ctx.get("client_edo")]):
+                if observer_id:
+                    ET.SubElement(root,"ИдПолИной").text=observer_id
+            # Observers precede the document in the file schema.
+            for observer in list(root.findall("ИдПолИной")):
+                root.remove(observer)
+                root.insert(0,observer)
+        parts = root.get("ИдФайл").split("_")
+        parts[1] = ""  # Actual subcontractor is filled after importing the draft.
+        parts[3] = ctx["carrier_edo"]
+        parts[4] = "1" if root.findall("ИдПолИной") else "0"
+        parts[-1] = str(uuid.uuid4())
+        root.set("ИдФайл","_".join(parts))
+        return root.get("ИдФайл")+".xml", _serialize(root)
 
     def ezz(self, ctx):
         self._validate(ctx, ezz=True)

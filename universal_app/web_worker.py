@@ -426,7 +426,8 @@ def handle(request):
         return {"requiresConfirmation": True, "warnings": warnings, "editableFields": required_vehicle_fields}
     if warnings and not request.get("confirmWarnings"):
         return {"requiresConfirmation": True, "warnings": warnings, "editableFields": editable_fields}
-    if kind == "cargo": filename, content = generator.etrn(ctx, False)
+    if kind == "contractor": filename, content = generator.contractor_etrn(ctx)
+    elif kind == "cargo": filename, content = generator.etrn(ctx, False)
     elif kind == "empty": filename, content = generator.etrn(ctx, True)
     elif kind == "order": filename, content = generator.ezz(ctx)
     else: raise ValueError("Неизвестный тип документа")
