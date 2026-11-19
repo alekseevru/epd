@@ -807,7 +807,7 @@ class Generator:
         if ctx["truck_number"] and not ownership_kind:
             raise ValueError(f"Для ТС {ctx['truck_number']} не указан подтверждённый тип владения в справочнике автомашин. Проверьте карточки TMS и обновите справочник.")
         if ownership_kind:
-            truck.set("ТипВлад", {"Собственность": "1", "Аренда": "3", "Лизинг": "4"}[ownership_kind])
+            truck.set("ТипВлад", {"Собственность": "1", "Совместная собственность супругов": "2", "Аренда": "3", "Лизинг": "4"}[ownership_kind])
         if ownership:
             if ownership.get("number") and ownership.get("date") and ownership.get("owner_inn"):
                 basis = ET.SubElement(truck, "ОснАрЛиз", {

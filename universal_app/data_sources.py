@@ -41,6 +41,8 @@ def normalize_vehicle_registration(value) -> str:
 
 def vehicle_ownership_kind(value) -> str:
     kind = clean(value).upper().replace("Ё", "Е")
+    if kind == "2" or ("СОВМЕСТН" in kind and "СУПРУГ" in kind):
+        return "Совместная собственность супругов"
     if "АРЕНД" in kind or kind == "3":
         return "Аренда"
     if "ЛИЗИНГ" in kind or kind == "4":

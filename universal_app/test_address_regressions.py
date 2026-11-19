@@ -20,7 +20,15 @@ class AddressRegressions(unittest.TestCase):
         ]
         vehicle = catalogs.vehicle("E670PC198","ПАСИШНИК СЕРГЕЙ ИВАНОВИЧ")
         self.assertEqual(vehicle["Тип владения"],"Совместная собственность супругов")
-        self.assertEqual(vehicle_ownership_kind(vehicle["Тип владения"]),"Собственность")
+        self.assertEqual(vehicle_ownership_kind(vehicle["Тип владения"]),"Совместная собственность супругов")
+        self.assertEqual(vehicle_ownership_kind("2"),"Совместная собственность супругов")
+        generator = Generator(Path(__file__).parent / "resources", catalogs)
+        ctx = generator.context({"_container":"TEST1234567","Исполнитель":"ИП ПАСИШНИК СЕРГЕЙ ИВАНОВИЧ","Номер автомашины":"Е670РС198","Номер прицепа":"АВ123478"}, date(2026,11,19), "Иванов Иван Иванович", None)
+        _, content = generator.etrn(ctx)
+        root = ET.fromstring(content)
+        self.assertEqual(root.find(".//СвТС/ТС").get("ТипВлад"),"2")
+        self.assertEqual(root.find(".//СвТС/Прицеп").get("ТипВлад"),"2")
+        self.assertIsNone(root.find(".//СвТС/ТС/ОснАрЛиз"))
         self.assertIsNone(catalogs.vehicle("Е670РС198","Другой перевозчик"))
         self.assertEqual(catalogs.vehicle("Е670РС198","Локом")["Тип владения"],"Аренда")
 
